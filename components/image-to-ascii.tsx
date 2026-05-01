@@ -4,16 +4,27 @@ import { useEffect, useRef, useState } from 'react'
 import { RefreshCcw, Upload } from 'lucide-react'
 import Image from 'next/image'
 import { Button } from '@/components/ui/button'
+import type { AsciiPayload } from '@/components/ascii-output'
+import { getMonospaceCellWidthHeightRatio } from '@/lib/monospace-metrics'
+import type { RenderMode } from '@/lib/render-mode'
+
+function lumaSourceMeta(img: HTMLImageElement) {
+  return {
+    aspectRatio: img.width / img.height,
+    sourceWidth: img.width,
+    sourceHeight: img.height,
+  }
+}
 
 interface ImageToAsciiProps {
-  onOutput: (ascii: '' | { plain: string; cols: number; rows: number; colors: Uint8ClampedArray }) => void
+  renderMode: RenderMode
+  onOutput: (payload: AsciiPayload) => void
   variant?: 'default' | 'frame'
   aspect?: 'square' | 'frame'
 }
 
-// Dot-field background + "ink" characters for subject.
+// Dot-field background + shading ramp for subject.
 const DOT_BG = '.'
-const INK = 'x9+*#%@'
 const SHADE = " .'`-:=+x*9#%@"
 
 // 8x8 Bayer ordered dither matrix (0..63)
@@ -28,8 +39,9 @@ const BAYER_8 = [
   [42, 26, 38, 22, 41, 25, 37, 21],
 ]
 
-export function ImageToAscii({ onOutput, variant = 'default', aspect = 'frame' }: ImageToAsciiProps) {
+export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect = 'frame' }: ImageToAsciiProps) {
   const [image, setImage] = useState<string | null>(null)
+  const [naturalAspect, setNaturalAspect] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const frameRef = useRef<HTMLDivElement | null>(null)
   const preRef = useRef<{
@@ -37,10 +49,25 @@ export function ImageToAscii({ onOutput, variant = 'default', aspect = 'frame' }
     rows: number
     lum: Float32Array
     edges: Float32Array
+    gx: Float32Array
+    gy: Float32Array
     rgb: Uint8ClampedArray
     baseThreshold: number
   } | null>(null)
   const animRef = useRef<number | null>(null)
+  const renderModeRef = useRef(renderMode)
+  renderModeRef.current = renderMode
+
+  useEffect(() => {
+    if (!image) {
+      setNaturalAspect(null)
+      return
+    }
+    const im = new window.Image()
+    im.onload = () => setNaturalAspect(im.width / im.height)
+    im.onerror = () => setNaturalAspect(null)
+    im.src = image
+  }, [image])
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -65,8 +92,14 @@ export function ImageToAscii({ onOutput, variant = 'default', aspect = 'frame' }
     const img = new window.Image()
     img.crossOrigin = 'anonymous'
     img.onload = () => {
-      const charAspect = 0.52 // text cell height/width compensation
-      const rows = Math.max(24, Math.round((cols * img.height) / img.width * charAspect))
+      if (!img.width || !img.height) return
+      const src = lumaSourceMeta(img)
+      const cellWh = getMonospaceCellWidthHeightRatio()
+      const modeNow = renderModeRef.current
+      const rows =
+        modeNow === 'ascii'
+          ? Math.max(24, Math.round((cols * img.height) / img.width * cellWh))
+          : Math.max(24, Math.round((cols * img.height) / img.width))
       const idx = (x: number, y: number) => y * cols + x
 
       canvas.width = cols
@@ -218,18 +251,41 @@ export function ImageToAscii({ onOutput, variant = 'default', aspect = 'frame' }
       }
       const baseThreshold = Math.max(0.08, Math.min(0.28, threshold / 255))
 
-      preRef.current = { cols, rows, lum, edges, rgb, baseThreshold }
+      const gxArr = new Float32Array(cols * rows)
+      const gyArr = new Float32Array(cols * rows)
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const xp = Math.min(cols - 1, x + 1)
+          const xm = Math.max(0, x - 1)
+          const yp = Math.min(rows - 1, y + 1)
+          const ym = Math.max(0, y - 1)
+          const ii = idx(x, y)
+          gxArr[ii] = lum[idx(xp, y)] - lum[idx(xm, y)]
+          gyArr[ii] = lum[idx(x, yp)] - lum[idx(x, ym)]
+        }
+      }
+
+      preRef.current = { cols, rows, lum, edges, gx: gxArr, gy: gyArr, rgb, baseThreshold }
 
       const render = (phase: number) => {
         const pre = preRef.current
         if (!pre) return
-        const { cols, rows, lum, edges, rgb, baseThreshold } = pre
-        const inkLevels = INK.length - 1
+        const { cols, rows, lum, edges, gx, gy, rgb, baseThreshold } = pre
+        const mode = renderModeRef.current
         const shadeLevels = SHADE.length - 1
         // Animate threshold slightly so the piece "breathes" but stays legible.
         const inkThreshold = Math.max(0.06, Math.min(0.32, baseThreshold + Math.sin(phase) * 0.02))
-        const outLines = new Array<string>(rows)
+        const outLines = mode === 'ascii' ? new Array<string>(rows) : null
         const colors = new Uint8ClampedArray(cols * rows * 3)
+        const dotRadii = mode === 'dots' ? new Float32Array(cols * rows) : null
+        const hatchStrength = mode === 'hatch' ? new Float32Array(cols * rows) : null
+        const tileCover = mode === 'mosaic' ? new Float32Array(cols * rows) : null
+        const contourMag = mode === 'contour' ? new Float32Array(cols * rows) : null
+        const contourTan = mode === 'contour' ? new Float32Array(cols * rows) : null
+        const stippleWeight = mode === 'stipple' ? new Float32Array(cols * rows) : null
+        const halftoneRadii = mode === 'halftone' ? new Float32Array(cols * rows) : null
+        const halftoneStretch = mode === 'halftone' ? new Float32Array(cols * rows) : null
+        const halftoneRot = mode === 'halftone' ? new Float32Array(cols * rows) : null
 
         const median = (arr: number[]) => {
           arr.sort((a, b) => a - b)
@@ -274,6 +330,140 @@ export function ImageToAscii({ onOutput, variant = 'default', aspect = 'frame' }
             colors[ci + 1] = g
             colors[ci + 2] = b
 
+            if (mode === 'dots') {
+              if (!isSubject) {
+                const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
+                const bx = (x + Math.floor(phase * 2)) & 7
+                const by = (y + Math.floor(phase * 1)) & 7
+                const t = (BAYER_8[by][bx] + 0.5) / 64
+                dotRadii![i] = bgTone > t ? 0.32 : 0.09
+              } else {
+                const edgeBoost = Math.min(1, e * 1.3)
+                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
+                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                s = Math.max(0, Math.min(shadeLevels, s + drift))
+                const norm = s / shadeLevels
+                dotRadii![i] = Math.min(1, Math.max(0.35, 0.42 + norm * 0.56))
+              }
+              continue
+            }
+
+            if (mode === 'hatch') {
+              const breathe = 1 + Math.sin(phase * 1.4 + x * 0.03 + y * 0.05) * 0.045
+              if (!isSubject) {
+                const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
+                const bx = (x + Math.floor(phase * 2)) & 7
+                const by = (y + Math.floor(phase * 1)) & 7
+                const t = (BAYER_8[by][bx] + 0.5) / 64
+                const base = bgTone > t ? 0.42 : 0.14
+                hatchStrength![i] = Math.min(1, base * breathe)
+              } else {
+                const edgeBoost = Math.min(1, e * 1.3)
+                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
+                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                s = Math.max(0, Math.min(shadeLevels, s + drift))
+                const norm = s / shadeLevels
+                hatchStrength![i] = Math.min(1, Math.max(0.26, (0.38 + norm * 0.58) * breathe))
+              }
+              continue
+            }
+
+            if (mode === 'mosaic') {
+              const breathe = 1 + Math.sin(phase * 1.2 + x * 0.025 + y * 0.04) * 0.04
+              if (!isSubject) {
+                const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
+                const bx = (x + Math.floor(phase * 2)) & 7
+                const by = (y + Math.floor(phase * 1)) & 7
+                const t = (BAYER_8[by][bx] + 0.5) / 64
+                tileCover![i] = Math.min(1, (bgTone > t ? 0.56 : 0.32) * breathe)
+              } else {
+                const edgeBoost = Math.min(1, e * 1.3)
+                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
+                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                s = Math.max(0, Math.min(shadeLevels, s + drift))
+                const norm = s / shadeLevels
+                tileCover![i] = Math.min(1, Math.max(0.38, 0.52 + norm * 0.46) * breathe)
+              }
+              continue
+            }
+
+            if (mode === 'contour') {
+              const breathe = 1 + Math.sin(phase * 1.3 + x * 0.02 + y * 0.03) * 0.035
+              const gxm = gx[i] ?? 0
+              const gym = gy[i] ?? 0
+              const tangent = Math.atan2(gym, gxm) + Math.PI / 2
+              const gm = Math.min(1, Math.hypot(gxm, gym) * 3.8 + e * 1.15)
+              if (!isSubject) {
+                const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
+                const bx = (x + Math.floor(phase * 2)) & 7
+                const by = (y + Math.floor(phase * 1)) & 7
+                const t = (BAYER_8[by][bx] + 0.5) / 64
+                contourMag![i] = Math.min(1, (bgTone > t ? 0.26 : 0.07) * breathe)
+                contourTan![i] = tangent + Math.sin(phase + x * 0.4 + y * 0.3) * 0.15
+              } else {
+                const edgeBoost = Math.min(1, e * 1.3)
+                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
+                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                s = Math.max(0, Math.min(shadeLevels, s + drift))
+                const norm = s / shadeLevels
+                contourMag![i] = Math.min(1, Math.max(0.14, gm * (0.42 + norm * 0.58))) * breathe
+                contourTan![i] = tangent
+              }
+              continue
+            }
+
+            if (mode === 'stipple') {
+              const breathe = 1 + Math.sin(phase * 1.5 + x * 0.028 + y * 0.045) * 0.042
+              if (!isSubject) {
+                const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
+                const bx = (x + Math.floor(phase * 2)) & 7
+                const by = (y + Math.floor(phase * 1)) & 7
+                const t = (BAYER_8[by][bx] + 0.5) / 64
+                stippleWeight![i] = Math.min(1, (bgTone > t ? 0.38 : 0.14) * breathe)
+              } else {
+                const edgeBoost = Math.min(1, e * 1.3)
+                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
+                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                s = Math.max(0, Math.min(shadeLevels, s + drift))
+                const norm = s / shadeLevels
+                stippleWeight![i] = Math.min(1, Math.max(0.28, 0.34 + norm * 0.62) * breathe)
+              }
+              continue
+            }
+
+            if (mode === 'halftone') {
+              const breathe = 1 + Math.sin(phase * 1.1 + x * 0.022 + y * 0.036) * 0.038
+              const gxm = gx[i] ?? 0
+              const gym = gy[i] ?? 0
+              let rot = Math.atan2(gym, gxm)
+              if (!Number.isFinite(rot)) rot = 0
+              if (!isSubject) {
+                const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
+                const bx = (x + Math.floor(phase * 2)) & 7
+                const by = (y + Math.floor(phase * 1)) & 7
+                const t = (BAYER_8[by][bx] + 0.5) / 64
+                halftoneRadii![i] = Math.min(1, (bgTone > t ? 0.28 : 0.08) * breathe)
+                halftoneStretch![i] = 0.35
+                halftoneRot![i] = rot + phase * 0.02
+              } else {
+                const edgeBoost = Math.min(1, e * 1.3)
+                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
+                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                s = Math.max(0, Math.min(shadeLevels, s + drift))
+                const norm = s / shadeLevels
+                halftoneRadii![i] = Math.min(1, Math.max(0.32, 0.4 + norm * 0.54) * breathe)
+                halftoneStretch![i] = Math.min(1, Math.max(0.15, 0.22 + norm * 0.78))
+                halftoneRot![i] = rot
+              }
+              continue
+            }
+
             if (!isSubject) {
               // Background: ordered dither for smooth tone + gentle shimmer.
               const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
@@ -296,9 +486,32 @@ export function ImageToAscii({ onOutput, variant = 'default', aspect = 'frame' }
             const ch = SHADE[s]
             line += ch
           }
-          outLines[y] = line
+          if (outLines) outLines[y] = line
         }
-        onOutput({ plain: outLines.join('\n'), cols, rows, colors })
+        if (mode === 'dots' && dotRadii) {
+          onOutput({ ...src, mode: 'dots', cols, rows, colors, dotRadii })
+        } else if (mode === 'hatch' && hatchStrength) {
+          onOutput({ ...src, mode: 'hatch', cols, rows, colors, hatchStrength })
+        } else if (mode === 'mosaic' && tileCover) {
+          onOutput({ ...src, mode: 'mosaic', cols, rows, colors, tileCover })
+        } else if (mode === 'contour' && contourMag && contourTan) {
+          onOutput({ ...src, mode: 'contour', cols, rows, colors, contourMag, contourTan })
+        } else if (mode === 'stipple' && stippleWeight) {
+          onOutput({ ...src, mode: 'stipple', cols, rows, colors, stippleWeight })
+        } else if (mode === 'halftone' && halftoneRadii && halftoneStretch && halftoneRot) {
+          onOutput({
+            ...src,
+            mode: 'halftone',
+            cols,
+            rows,
+            colors,
+            halftoneRadii,
+            halftoneStretch,
+            halftoneRot,
+          })
+        } else if (outLines) {
+          onOutput({ ...src, mode: 'ascii', plain: outLines.join('\n'), cols, rows, colors })
+        }
       }
 
       // Initial render + animation loop
@@ -322,7 +535,7 @@ export function ImageToAscii({ onOutput, variant = 'default', aspect = 'frame' }
       convertImageToAscii(estimatedCols)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image, variant])
+  }, [image, variant, renderMode])
 
   useEffect(() => {
     return () => {
@@ -343,7 +556,9 @@ export function ImageToAscii({ onOutput, variant = 'default', aspect = 'frame' }
     <div
       ref={frameRef}
       className="relative w-full rounded-2xl border border-border bg-background overflow-hidden transition-colors hover:bg-accent/20"
-      style={{ aspectRatio: aspect === 'square' ? '1 / 1' : '16 / 11' }}
+      style={{
+        aspectRatio: naturalAspect ?? (aspect === 'square' ? 1 : 16 / 11),
+      }}
     >
       <input
         ref={fileInputRef}

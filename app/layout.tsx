@@ -9,10 +9,36 @@ import { ThemeProvider } from '@/components/theme-provider'
 const _geist = V0_Font_Geist({ subsets: ['latin'], weight: ["100","200","300","400","500","600","700","800","900"] })
 const _geistMono = V0_Font_Geist_Mono({ subsets: ['latin'], weight: ["100","200","300","400","500","600","700","800","900"] })
 
+const siteDescription =
+  'Turn any image into colored generative art in the browser: ASCII, halftone dots, cross-hatch, mosaic tiles, contour strokes, stippling, and angled halftone. No upload to a server—processing stays on your device.'
+
 export const metadata: Metadata = {
-  title: 'LUMA',
-  description: 'Image to ASCII. Prompt to ASCII. Minimal by design.',
-  generator: 'v0.app',
+  title: {
+    default: 'LUMA',
+    template: '%s · LUMA',
+  },
+  description: siteDescription,
+  keywords: [
+    'LUMA',
+    'generative art',
+    'image to ASCII',
+    'halftone',
+    'cross-hatch',
+    'mosaic',
+    'stipple',
+    'Next.js',
+    'client-side',
+  ],
+  openGraph: {
+    title: 'LUMA',
+    description: siteDescription,
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'LUMA',
+    description: siteDescription,
+  },
   icons: {
     icon: [
       {
