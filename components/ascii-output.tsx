@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTheme } from 'next-themes'
+import type { ExportSize } from '@/lib/render-settings'
 import {
   ASCII_LINE_HEIGHT_EM,
   getMonospaceCellWidthHeightRatio,
@@ -15,6 +16,7 @@ export type LumaSourceMeta = {
   aspectRatio: number
   sourceWidth: number
   sourceHeight: number
+  sourceDataUrl?: string
 }
 
 export type AsciiPayload =
@@ -90,6 +92,8 @@ interface AsciiOutputProps {
   onClear: () => void
   variant?: 'default' | 'frame'
   aspect?: 'square' | 'frame'
+  exportSize?: ExportSize
+  sourceAspect?: number | null
 }
 
 const OUTPUT_LABELS: Record<Exclude<AsciiPayload, ''>['mode'], string> = {
@@ -102,7 +106,13 @@ const OUTPUT_LABELS: Record<Exclude<AsciiPayload, ''>['mode'], string> = {
   halftone: 'Halftone ellipse output',
 }
 
-export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: AsciiOutputProps) {
+export function AsciiOutput({
+  output,
+  variant = 'default',
+  aspect = 'frame',
+  exportSize = 'frame',
+  sourceAspect,
+}: AsciiOutputProps) {
   const colsCount = output ? output.cols : 0
   const ariaLabel = useMemo(
     () => (output ? OUTPUT_LABELS[output.mode] : 'Output (empty)'),
@@ -111,6 +121,7 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [fontSizePx, setFontSizePx] = useState<number>(10)
+  const [comparePosition, setComparePosition] = useState(50)
   const { resolvedTheme } = useTheme()
 
   useEffect(() => {
@@ -176,7 +187,7 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
       }
     }
 
-    const { scale, outW, outH } = fitUniformScale(nativeW, nativeH, w, h)
+    const { scale, outW, outH } = fitUniformScale(payload.sourceWidth, payload.sourceHeight, w, h)
     const offsetX = (width - outW) / 2
     const offsetY = (height - outH) / 2
 
@@ -264,7 +275,7 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
       }
     }
 
-    const { scale, outW, outH } = fitUniformScale(nativeW, nativeH, w, h)
+    const { scale, outW, outH } = fitUniformScale(payload.sourceWidth, payload.sourceHeight, w, h)
     const offsetX = (width - outW) / 2
     const offsetY = (height - outH) / 2
 
@@ -317,7 +328,7 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
       }
     }
 
-    const { scale, outW, outH } = fitUniformScale(nativeW, nativeH, w, h)
+    const { scale, outW, outH } = fitUniformScale(payload.sourceWidth, payload.sourceHeight, w, h)
     const offsetX = (width - outW) / 2
     const offsetY = (height - outH) / 2
     ctx.imageSmoothingEnabled = false
@@ -373,7 +384,7 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
       }
     }
 
-    const { scale, outW, outH } = fitUniformScale(nativeW, nativeH, w, h)
+    const { scale, outW, outH } = fitUniformScale(payload.sourceWidth, payload.sourceHeight, w, h)
     const offsetX = (width - outW) / 2
     const offsetY = (height - outH) / 2
     ctx.imageSmoothingEnabled = false
@@ -429,7 +440,7 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
       }
     }
 
-    const { scale, outW, outH } = fitUniformScale(nativeW, nativeH, w, h)
+    const { scale, outW, outH } = fitUniformScale(payload.sourceWidth, payload.sourceHeight, w, h)
     const offsetX = (width - outW) / 2
     const offsetY = (height - outH) / 2
     ctx.imageSmoothingEnabled = false
@@ -482,7 +493,7 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
       }
     }
 
-    const { scale, outW, outH } = fitUniformScale(nativeW, nativeH, w, h)
+    const { scale, outW, outH } = fitUniformScale(payload.sourceWidth, payload.sourceHeight, w, h)
     const offsetX = (width - outW) / 2
     const offsetY = (height - outH) / 2
     ctx.imageSmoothingEnabled = false
@@ -571,7 +582,7 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
     offCtx.putImageData(img, 0, 0)
 
     // Float scale keeps output aspect identical to nativeW/nativeH (matches source image).
-    const { scale, outW, outH } = fitUniformScale(nativeW, nativeH, w, h)
+    const { scale, outW, outH } = fitUniformScale(payload.sourceWidth, payload.sourceHeight, w, h)
     const offsetX = (width - outW) / 2
     const offsetY = (height - outH) / 2
 
@@ -614,13 +625,25 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
 
     const bg = resolvedTheme === 'dark' ? '#000000' : '#ffffff'
     const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1))
+    const exportDimensions = (() => {
+      if (exportSize === 'square1080') return { width: 1080, height: 1080, dpr: 1 }
+      if (exportSize === 'poster2k') return { width: 2048, height: 2048, dpr: 1 }
+      if (exportSize === 'source') {
+        return {
+          width: Math.max(1, output.sourceWidth),
+          height: Math.max(1, output.sourceHeight),
+          dpr: 1,
+        }
+      }
+      return { width: el.clientWidth, height: el.clientHeight, dpr }
+    })()
     const outCanvas = document.createElement('canvas')
-    outCanvas.width = Math.floor(el.clientWidth * dpr)
-    outCanvas.height = Math.floor(el.clientHeight * dpr)
+    outCanvas.width = Math.floor(exportDimensions.width * exportDimensions.dpr)
+    outCanvas.height = Math.floor(exportDimensions.height * exportDimensions.dpr)
     const ctx = outCanvas.getContext('2d')
     if (!ctx) return
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    draw(ctx, el.clientWidth, el.clientHeight, output, bg)
+    ctx.setTransform(exportDimensions.dpr, 0, 0, exportDimensions.dpr, 0, 0)
+    draw(ctx, exportDimensions.width, exportDimensions.height, output, bg)
 
     const a = document.createElement('a')
     a.href = outCanvas.toDataURL('image/png')
@@ -641,11 +664,13 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
   return (
     <div
       aria-label={ariaLabel}
-      className="w-full rounded-2xl border border-border bg-background overflow-hidden"
+      className="w-full overflow-hidden bg-background"
       style={{
         aspectRatio:
-          output && output !== ''
+          output
             ? output.aspectRatio
+            : sourceAspect
+              ? sourceAspect
             : aspect === 'square'
               ? 1
               : 16 / 11,
@@ -653,7 +678,37 @@ export function AsciiOutput({ output, variant = 'default', aspect = 'frame' }: A
     >
       <div ref={containerRef} className="relative h-full w-full overflow-hidden">
         <canvas ref={canvasRef} className="absolute inset-0" />
-        <div className="absolute right-3 top-3">
+        {output && output.sourceDataUrl && (
+          <div className="absolute inset-0" style={{ clipPath: `inset(0 ${100 - comparePosition}% 0 0)` }}>
+            <img
+              src={output.sourceDataUrl}
+              alt="Original comparison"
+              className="h-full w-full object-contain p-[18px]"
+              draggable={false}
+            />
+          </div>
+        )}
+        {output && output.sourceDataUrl && (
+          <div
+            className="pointer-events-none absolute inset-y-0 z-10 w-px bg-foreground/80"
+            style={{ left: `${comparePosition}%` }}
+            aria-hidden
+          >
+            <span className="absolute left-1/2 top-1/2 size-7 -translate-x-1/2 -translate-y-1/2 border border-border bg-background shadow-sm" />
+          </div>
+        )}
+        {output && output.sourceDataUrl && (
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={comparePosition}
+            onChange={(event) => setComparePosition(Number(event.target.value))}
+            aria-label="Compare original and output"
+            className="absolute inset-0 z-20 h-full w-full cursor-ew-resize opacity-0"
+          />
+        )}
+        <div className="absolute right-3 top-3 z-30">
           <Button
             type="button"
             variant="ghost"

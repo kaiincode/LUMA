@@ -7,12 +7,14 @@ import { Button } from '@/components/ui/button'
 import type { AsciiPayload } from '@/components/ascii-output'
 import { getMonospaceCellWidthHeightRatio } from '@/lib/monospace-metrics'
 import type { RenderMode } from '@/lib/render-mode'
+import { getMotionTiming, type ModeSettings, type MotionMode } from '@/lib/render-settings'
 
-function lumaSourceMeta(img: HTMLImageElement) {
+function lumaSourceMeta(img: HTMLImageElement, sourceDataUrl?: string) {
   return {
     aspectRatio: img.width / img.height,
     sourceWidth: img.width,
     sourceHeight: img.height,
+    sourceDataUrl,
   }
 }
 
@@ -21,11 +23,16 @@ interface ImageToAsciiProps {
   onOutput: (payload: AsciiPayload) => void
   variant?: 'default' | 'frame'
   aspect?: 'square' | 'frame'
+  motionMode?: MotionMode
+  detail?: number
+  modeSettings?: ModeSettings
+  onSourceAspectChange?: (aspectRatio: number | null) => void
 }
 
 // Dot-field background + shading ramp for subject.
 const DOT_BG = '.'
 const SHADE = " .'`-:=+x*9#%@"
+const DEFAULT_MODE_SETTINGS: ModeSettings = { strength: 70 }
 
 // 8x8 Bayer ordered dither matrix (0..63)
 const BAYER_8 = [
@@ -39,7 +46,16 @@ const BAYER_8 = [
   [42, 26, 38, 22, 41, 25, 37, 21],
 ]
 
-export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect = 'frame' }: ImageToAsciiProps) {
+export function ImageToAscii({
+  renderMode,
+  onOutput,
+  variant = 'default',
+  aspect = 'frame',
+  motionMode = 'subtle',
+  detail = 75,
+  modeSettings = DEFAULT_MODE_SETTINGS,
+  onSourceAspectChange,
+}: ImageToAsciiProps) {
   const [image, setImage] = useState<string | null>(null)
   const [naturalAspect, setNaturalAspect] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -57,17 +73,29 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
   const animRef = useRef<number | null>(null)
   const renderModeRef = useRef(renderMode)
   renderModeRef.current = renderMode
+  const motionModeRef = useRef(motionMode)
+  motionModeRef.current = motionMode
+  const modeSettingsRef = useRef(modeSettings)
+  modeSettingsRef.current = modeSettings
 
   useEffect(() => {
     if (!image) {
       setNaturalAspect(null)
+      onSourceAspectChange?.(null)
       return
     }
     const im = new window.Image()
-    im.onload = () => setNaturalAspect(im.width / im.height)
-    im.onerror = () => setNaturalAspect(null)
+    im.onload = () => {
+      const aspectRatio = im.width / im.height
+      setNaturalAspect(aspectRatio)
+      onSourceAspectChange?.(aspectRatio)
+    }
+    im.onerror = () => {
+      setNaturalAspect(null)
+      onSourceAspectChange?.(null)
+    }
     im.src = image
-  }, [image])
+  }, [image, onSourceAspectChange])
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -83,7 +111,8 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
   const convertImageToAscii = (targetCols?: number) => {
     if (!image) return
     // Choose columns based on frame width for more detail, while staying performant.
-    const cols = Math.max(110, Math.min(220, Math.round(targetCols ?? 170)))
+    const detailScale = Math.max(0.45, Math.min(1, detail / 100))
+    const cols = Math.max(80, Math.min(220, Math.round((targetCols ?? 170) * detailScale)))
 
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
@@ -93,7 +122,7 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
     img.crossOrigin = 'anonymous'
     img.onload = () => {
       if (!img.width || !img.height) return
-      const src = lumaSourceMeta(img)
+      const src = lumaSourceMeta(img, image)
       const cellWh = getMonospaceCellWidthHeightRatio()
       const modeNow = renderModeRef.current
       const rows =
@@ -272,9 +301,15 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
         if (!pre) return
         const { cols, rows, lum, edges, gx, gy, rgb, baseThreshold } = pre
         const mode = renderModeRef.current
+        const timing = getMotionTiming(motionModeRef.current)
+        const strength = Math.max(0.35, Math.min(1.45, (modeSettingsRef.current.strength || 70) / 70))
         const shadeLevels = SHADE.length - 1
-        // Animate threshold slightly so the piece "breathes" but stays legible.
-        const inkThreshold = Math.max(0.06, Math.min(0.32, baseThreshold + Math.sin(phase) * 0.02))
+        const motionPhase = phase * timing.scale
+        const shimmerX = Math.floor(phase * 0.7)
+        const shimmerY = Math.floor(phase * 0.35)
+        const driftSeed = Math.floor(phase * 0.9)
+        // Animate threshold slightly so the piece breathes without forcing constant redraw churn.
+        const inkThreshold = Math.max(0.06, Math.min(0.32, baseThreshold + Math.sin(motionPhase) * 0.006))
         const outLines = mode === 'ascii' ? new Array<string>(rows) : null
         const colors = new Uint8ClampedArray(cols * rows * 3)
         const dotRadii = mode === 'dots' ? new Float32Array(cols * rows) : null
@@ -297,7 +332,7 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
             const i = idx(x, y)
             const l = lum[i] // 0..1 (dark..light)
             const e = edges[i] ?? 0
-            const ink = Math.min(1, Math.max(0, Math.pow(1 - l, 1.15) * 0.95 + e * 0.95))
+            const ink = Math.min(1, Math.max(0, (Math.pow(1 - l, 1.15) * 0.95 + e * 0.95) * strength))
             const isSubject = ink >= inkThreshold
 
             const rs: number[] = []
@@ -333,15 +368,15 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
             if (mode === 'dots') {
               if (!isSubject) {
                 const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
-                const bx = (x + Math.floor(phase * 2)) & 7
-                const by = (y + Math.floor(phase * 1)) & 7
+                const bx = (x + shimmerX) & 7
+                const by = (y + shimmerY) & 7
                 const t = (BAYER_8[by][bx] + 0.5) / 64
-                dotRadii![i] = bgTone > t ? 0.32 : 0.09
+                dotRadii![i] = Math.min(1, (bgTone > t ? 0.32 : 0.09) * strength)
               } else {
                 const edgeBoost = Math.min(1, e * 1.3)
-                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                const shadeVal = Math.min(1, Math.max(0, ((1 - l) * 0.85 + edgeBoost * 0.25) * strength))
                 let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
-                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                const drift = (x * 3 + y * 5 + driftSeed) % 13 === 0 ? 1 : 0
                 s = Math.max(0, Math.min(shadeLevels, s + drift))
                 const norm = s / shadeLevels
                 dotRadii![i] = Math.min(1, Math.max(0.35, 0.42 + norm * 0.56))
@@ -350,19 +385,19 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
             }
 
             if (mode === 'hatch') {
-              const breathe = 1 + Math.sin(phase * 1.4 + x * 0.03 + y * 0.05) * 0.045
+              const breathe = 1 + Math.sin(motionPhase * 1.4 + x * 0.03 + y * 0.05) * 0.012
               if (!isSubject) {
                 const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
-                const bx = (x + Math.floor(phase * 2)) & 7
-                const by = (y + Math.floor(phase * 1)) & 7
+                const bx = (x + shimmerX) & 7
+                const by = (y + shimmerY) & 7
                 const t = (BAYER_8[by][bx] + 0.5) / 64
                 const base = bgTone > t ? 0.42 : 0.14
-                hatchStrength![i] = Math.min(1, base * breathe)
+                hatchStrength![i] = Math.min(1, base * breathe * strength)
               } else {
                 const edgeBoost = Math.min(1, e * 1.3)
-                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                const shadeVal = Math.min(1, Math.max(0, ((1 - l) * 0.85 + edgeBoost * 0.25) * strength))
                 let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
-                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                const drift = (x * 3 + y * 5 + driftSeed) % 13 === 0 ? 1 : 0
                 s = Math.max(0, Math.min(shadeLevels, s + drift))
                 const norm = s / shadeLevels
                 hatchStrength![i] = Math.min(1, Math.max(0.26, (0.38 + norm * 0.58) * breathe))
@@ -371,18 +406,18 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
             }
 
             if (mode === 'mosaic') {
-              const breathe = 1 + Math.sin(phase * 1.2 + x * 0.025 + y * 0.04) * 0.04
+              const breathe = 1 + Math.sin(motionPhase * 1.2 + x * 0.025 + y * 0.04) * 0.01
               if (!isSubject) {
                 const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
-                const bx = (x + Math.floor(phase * 2)) & 7
-                const by = (y + Math.floor(phase * 1)) & 7
+                const bx = (x + shimmerX) & 7
+                const by = (y + shimmerY) & 7
                 const t = (BAYER_8[by][bx] + 0.5) / 64
-                tileCover![i] = Math.min(1, (bgTone > t ? 0.56 : 0.32) * breathe)
+                tileCover![i] = Math.min(1, (bgTone > t ? 0.56 : 0.32) * breathe * strength)
               } else {
                 const edgeBoost = Math.min(1, e * 1.3)
-                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                const shadeVal = Math.min(1, Math.max(0, ((1 - l) * 0.85 + edgeBoost * 0.25) * strength))
                 let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
-                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                const drift = (x * 3 + y * 5 + driftSeed) % 13 === 0 ? 1 : 0
                 s = Math.max(0, Math.min(shadeLevels, s + drift))
                 const norm = s / shadeLevels
                 tileCover![i] = Math.min(1, Math.max(0.38, 0.52 + norm * 0.46) * breathe)
@@ -391,44 +426,44 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
             }
 
             if (mode === 'contour') {
-              const breathe = 1 + Math.sin(phase * 1.3 + x * 0.02 + y * 0.03) * 0.035
+              const breathe = 1 + Math.sin(motionPhase * 1.3 + x * 0.02 + y * 0.03) * 0.01
               const gxm = gx[i] ?? 0
               const gym = gy[i] ?? 0
               const tangent = Math.atan2(gym, gxm) + Math.PI / 2
               const gm = Math.min(1, Math.hypot(gxm, gym) * 3.8 + e * 1.15)
               if (!isSubject) {
                 const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
-                const bx = (x + Math.floor(phase * 2)) & 7
-                const by = (y + Math.floor(phase * 1)) & 7
+                const bx = (x + shimmerX) & 7
+                const by = (y + shimmerY) & 7
                 const t = (BAYER_8[by][bx] + 0.5) / 64
-                contourMag![i] = Math.min(1, (bgTone > t ? 0.26 : 0.07) * breathe)
-                contourTan![i] = tangent + Math.sin(phase + x * 0.4 + y * 0.3) * 0.15
+                contourMag![i] = Math.min(1, (bgTone > t ? 0.26 : 0.07) * breathe * strength)
+                contourTan![i] = tangent + Math.sin(motionPhase + x * 0.4 + y * 0.3) * 0.035
               } else {
                 const edgeBoost = Math.min(1, e * 1.3)
-                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                const shadeVal = Math.min(1, Math.max(0, ((1 - l) * 0.85 + edgeBoost * 0.25) * strength))
                 let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
-                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                const drift = (x * 3 + y * 5 + driftSeed) % 13 === 0 ? 1 : 0
                 s = Math.max(0, Math.min(shadeLevels, s + drift))
                 const norm = s / shadeLevels
-                contourMag![i] = Math.min(1, Math.max(0.14, gm * (0.42 + norm * 0.58))) * breathe
+                contourMag![i] = Math.min(1, Math.max(0.14, gm * (0.42 + norm * 0.58)) * breathe * strength)
                 contourTan![i] = tangent
               }
               continue
             }
 
             if (mode === 'stipple') {
-              const breathe = 1 + Math.sin(phase * 1.5 + x * 0.028 + y * 0.045) * 0.042
+              const breathe = 1 + Math.sin(motionPhase * 1.5 + x * 0.028 + y * 0.045) * 0.012
               if (!isSubject) {
                 const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
-                const bx = (x + Math.floor(phase * 2)) & 7
-                const by = (y + Math.floor(phase * 1)) & 7
+                const bx = (x + shimmerX) & 7
+                const by = (y + shimmerY) & 7
                 const t = (BAYER_8[by][bx] + 0.5) / 64
-                stippleWeight![i] = Math.min(1, (bgTone > t ? 0.38 : 0.14) * breathe)
+                stippleWeight![i] = Math.min(1, (bgTone > t ? 0.38 : 0.14) * breathe * strength)
               } else {
                 const edgeBoost = Math.min(1, e * 1.3)
-                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                const shadeVal = Math.min(1, Math.max(0, ((1 - l) * 0.85 + edgeBoost * 0.25) * strength))
                 let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
-                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                const drift = (x * 3 + y * 5 + driftSeed) % 13 === 0 ? 1 : 0
                 s = Math.max(0, Math.min(shadeLevels, s + drift))
                 const norm = s / shadeLevels
                 stippleWeight![i] = Math.min(1, Math.max(0.28, 0.34 + norm * 0.62) * breathe)
@@ -437,24 +472,24 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
             }
 
             if (mode === 'halftone') {
-              const breathe = 1 + Math.sin(phase * 1.1 + x * 0.022 + y * 0.036) * 0.038
+              const breathe = 1 + Math.sin(motionPhase * 1.1 + x * 0.022 + y * 0.036) * 0.01
               const gxm = gx[i] ?? 0
               const gym = gy[i] ?? 0
               let rot = Math.atan2(gym, gxm)
               if (!Number.isFinite(rot)) rot = 0
               if (!isSubject) {
                 const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
-                const bx = (x + Math.floor(phase * 2)) & 7
-                const by = (y + Math.floor(phase * 1)) & 7
+                const bx = (x + shimmerX) & 7
+                const by = (y + shimmerY) & 7
                 const t = (BAYER_8[by][bx] + 0.5) / 64
-                halftoneRadii![i] = Math.min(1, (bgTone > t ? 0.28 : 0.08) * breathe)
+                halftoneRadii![i] = Math.min(1, (bgTone > t ? 0.28 : 0.08) * breathe * strength)
                 halftoneStretch![i] = 0.35
-                halftoneRot![i] = rot + phase * 0.02
+                halftoneRot![i] = rot + motionPhase * 0.004
               } else {
                 const edgeBoost = Math.min(1, e * 1.3)
-                const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+                const shadeVal = Math.min(1, Math.max(0, ((1 - l) * 0.85 + edgeBoost * 0.25) * strength))
                 let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
-                const drift = (x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0 ? 1 : 0
+                const drift = (x * 3 + y * 5 + driftSeed) % 13 === 0 ? 1 : 0
                 s = Math.max(0, Math.min(shadeLevels, s + drift))
                 const norm = s / shadeLevels
                 halftoneRadii![i] = Math.min(1, Math.max(0.32, 0.4 + norm * 0.54) * breathe)
@@ -466,9 +501,9 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
 
             if (!isSubject) {
               // Background: ordered dither for smooth tone + gentle shimmer.
-              const bgTone = Math.min(1, Math.max(0, 1 - (l * 0.92 + e * 0.12)))
-              const bx = (x + Math.floor(phase * 2)) & 7
-              const by = (y + Math.floor(phase * 1)) & 7
+              const bgTone = Math.min(1, Math.max(0, (1 - (l * 0.92 + e * 0.12)) * strength))
+              const bx = (x + shimmerX) & 7
+              const by = (y + shimmerY) & 7
               const t = (BAYER_8[by][bx] + 0.5) / 64
               const ch = bgTone > t ? ':' : DOT_BG
               line += ch
@@ -477,11 +512,11 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
 
             // Subject: multi-level shading using luminance + edge boost.
             const edgeBoost = Math.min(1, e * 1.3)
-            const shadeVal = Math.min(1, Math.max(0, (1 - l) * 0.85 + edgeBoost * 0.25))
+            const shadeVal = Math.min(1, Math.max(0, ((1 - l) * 0.85 + edgeBoost * 0.25) * strength))
             let s = Math.max(0, Math.min(shadeLevels, Math.round(shadeVal * shadeLevels)))
 
             // Add subtle motion: jitter the shade index by a tiny amount.
-            const drift = ((x * 3 + y * 5 + Math.floor(phase * 3)) % 7 === 0) ? 1 : 0
+            const drift = ((x * 3 + y * 5 + driftSeed) % 13 === 0) ? 1 : 0
             s = Math.max(0, Math.min(shadeLevels, s + drift))
             const ch = SHADE[s]
             line += ch
@@ -518,10 +553,14 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
       if (animRef.current) window.clearInterval(animRef.current)
       let p = 0
       render(p)
-      animRef.current = window.setInterval(() => {
-        p += 0.22
-        render(p)
-      }, 110)
+      const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const timing = getMotionTiming(motionModeRef.current)
+      if (!prefersReducedMotion && timing.intervalMs > 0) {
+        animRef.current = window.setInterval(() => {
+          p += timing.phaseStep
+          render(p)
+        }, timing.intervalMs)
+      }
     }
     img.src = image
   }
@@ -535,7 +574,7 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
       convertImageToAscii(estimatedCols)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image, variant, renderMode])
+  }, [image, variant, renderMode, motionMode, detail, modeSettings])
 
   useEffect(() => {
     return () => {
@@ -555,7 +594,7 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
   return (
     <div
       ref={frameRef}
-      className="relative w-full rounded-2xl border border-border bg-background overflow-hidden transition-colors hover:bg-accent/20"
+      className="relative w-full overflow-hidden bg-background transition-colors hover:bg-accent/20"
       style={{
         aspectRatio: naturalAspect ?? (aspect === 'square' ? 1 : 16 / 11),
       }}
@@ -576,7 +615,7 @@ export function ImageToAscii({ renderMode, onOutput, variant = 'default', aspect
       >
         {image ? (
           <div className="absolute inset-0">
-            <Image src={image} alt="Input image" fill className="object-contain p-8" />
+            <Image src={image} alt="Input image" fill className="object-contain p-[18px]" />
           </div>
         ) : (
           <div className="grid place-items-center">
