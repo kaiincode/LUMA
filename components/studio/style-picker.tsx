@@ -32,24 +32,46 @@ function Thumb({ field, mode, paper, font }: { field: LumaField | null; mode: Re
 }
 
 type StylePickerProps = {
+  /** Radio group name; must be unique when more than one picker is on the page. */
+  name: string
   value: RenderMode
   onChange: (mode: RenderMode) => void
   /** Small square fields for the thumbnails: text-shaped cells for ASCII, square for the rest. */
   thumbs: { square: LumaField | null; text: LumaField | null }
   paper: Paper
   font: string
+  /** `grid` for the desktop panel, `strip` for a one-row scroller on phones. */
+  layout?: 'grid' | 'strip'
 }
 
-export function StylePicker({ value, onChange, thumbs, paper, font }: StylePickerProps) {
+export function StylePicker({ name, value, onChange, thumbs, paper, font, layout = 'grid' }: StylePickerProps) {
+  const stripRef = useRef<HTMLDivElement | null>(null)
+
+  // Keep the chosen style in view in the scroller.
+  useEffect(() => {
+    if (layout !== 'strip') return
+    const el = stripRef.current?.querySelector<HTMLElement>(`[data-mode="${value}"]`)
+    el?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' })
+  }, [layout, value])
+
   return (
-    <div role="radiogroup" aria-label="Style" className="grid grid-cols-4 gap-x-2 gap-y-3 sm:grid-cols-7 lg:grid-cols-4">
+    <div
+      ref={stripRef}
+      role="radiogroup"
+      aria-label="Style"
+      className={cn(
+        layout === 'strip'
+          ? 'flex snap-x gap-2.5 overflow-x-auto px-4 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+          : 'grid grid-cols-4 gap-x-2 gap-y-3',
+      )}
+    >
       {RENDER_MODES.map((mode) => {
         const active = mode === value
         return (
-          <label key={mode} className="group cursor-pointer">
+          <label key={mode} data-mode={mode} className={cn('group cursor-pointer', layout === 'strip' && 'w-[4.25rem] shrink-0 snap-center')}>
             <input
               type="radio"
-              name="style"
+              name={name}
               value={mode}
               checked={active}
               onChange={() => onChange(mode)}

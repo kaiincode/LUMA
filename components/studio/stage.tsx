@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { RenderMode } from '@/lib/render-mode'
-import { containRect, drawPattern, PAPER_COLOR, type LumaField, type Paper, type Rect } from '@/lib/luma/engine'
+import { containRect, drawPattern, PAPER_COLOR, type LumaField, type LumaSource, type Paper, type Rect } from '@/lib/luma/engine'
 import { cn } from '@/lib/utils'
 
 /** Space left around the artwork inside the stage, as a share of the short side. */
@@ -16,7 +16,7 @@ type StageProps = {
   look: { strength: number; brightness: number; contrast: number }
   font: string
   compare: boolean
-  source: { el: HTMLImageElement; width: number; height: number } | null
+  source: LumaSource | null
   label: string
   onSize?: (size: { w: number; h: number }) => void
   children?: React.ReactNode

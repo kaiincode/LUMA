@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Download, ImagePlus, Moon, RotateCcw, Sun } from 'lucide-react'
+import { Contrast, Download, ImagePlus, Moon, RotateCcw, Shapes, SlidersHorizontal, Sun } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { Slider } from '@/components/ui/slider'
 import { useMounted } from '@/hooks/use-mounted'
@@ -15,6 +15,7 @@ import {
   drawPattern,
   gridFor,
   PAPER_COLOR,
+  type LumaSource,
   type Paper,
 } from '@/lib/luma/engine'
 import { cn } from '@/lib/utils'
@@ -25,22 +26,65 @@ import { StylePicker } from './style-picker'
 const MONO = '"Geist Mono", ui-monospace, monospace'
 const FALLBACK_MONO = 'ui-monospace, monospace'
 
-type Source = { el: HTMLImageElement; width: number; height: number; name: string; url: string }
+/** Longest side of the working copy. Phone photos are often 4000px+; the grid never needs that. */
+const WORKING_SIZE = 1600
+
+type Source = {
+  name: string
+  url: string
+  /** Original pixel size, used for the "Original" export. */
+  width: number
+  height: number
+  /** Downscaled working copy used for analysis and the compare view. */
+  work: LumaSource
+}
 
 const EXPORT_SIZES: ExportSize[] = ['source', 'square1080', 'poster2k']
 const DEFAULT_DETAIL = 70
 
 /** Detail 45–100 maps to 60–260 columns. */
 const columnsFor = (detail: number) => Math.round(60 + ((detail - 45) / 55) * 200)
+const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`)
 
 function loadImage(url: string, name: string): Promise<Source> {
   return new Promise((resolve, reject) => {
-    const el = new Image()
-    el.decoding = 'async'
-    el.onload = () => resolve({ el, width: el.naturalWidth, height: el.naturalHeight, name, url })
-    el.onerror = () => reject(new Error(name))
-    el.src = url
+    const img = new Image()
+    img.decoding = 'async'
+    img.onload = () => {
+      const width = img.naturalWidth
+      const height = img.naturalHeight
+      const k = Math.min(1, WORKING_SIZE / Math.max(width, height))
+      const work = document.createElement('canvas')
+      work.width = Math.max(1, Math.round(width * k))
+      work.height = Math.max(1, Math.round(height * k))
+      const ctx = work.getContext('2d')!
+      ctx.imageSmoothingQuality = 'high'
+      ctx.drawImage(img, 0, 0, work.width, work.height)
+      resolve({ name, url, width, height, work: { el: work, width: work.width, height: work.height } })
+    }
+    img.onerror = () => reject(new Error(name))
+    img.src = url
   })
+}
+
+/** Hands the PNG to the share sheet on phones (so it can go to Photos), or downloads it. */
+async function saveBlob(blob: Blob, filename: string) {
+  const file = new File([blob], filename, { type: 'image/png' })
+  const touch = window.matchMedia('(pointer: coarse)').matches
+  if (touch && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file] })
+      return
+    } catch (e) {
+      if ((e as DOMException).name === 'AbortError') return
+      // Share refused (e.g. the gesture expired): fall through to a download.
+    }
+  }
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }
 
 function Segmented<T extends string>({
@@ -48,11 +92,15 @@ function Segmented<T extends string>({
   value,
   options,
   onChange,
+  size = 'sm',
+  name = label,
 }: {
   label: string
+  name?: string
   value: T
   options: Array<{ value: T; label: string }>
   onChange: (v: T) => void
+  size?: 'sm' | 'lg'
 }) {
   return (
     <div role="radiogroup" aria-label={label} className="grid auto-cols-fr grid-flow-col rounded-lg bg-foreground/[0.06] p-0.5">
@@ -60,13 +108,14 @@ function Segmented<T extends string>({
         <label
           key={o.value}
           className={cn(
-            'cursor-pointer rounded-md py-1.5 text-center text-xs transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
+            'cursor-pointer rounded-md text-center transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
+            size === 'lg' ? 'py-2.5 text-sm' : 'py-1.5 text-xs',
             o.value === value ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
           )}
         >
           <input
             type="radio"
-            name={label}
+            name={name}
             value={o.value}
             checked={o.value === value}
             onChange={() => onChange(o.value)}
@@ -79,34 +128,58 @@ function Segmented<T extends string>({
   )
 }
 
-const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`)
-
+/**
+ * A labelled slider. With `commit`, the value is applied when the thumb is
+ * released rather than on every step — used for Detail, which re-analyses
+ * the image.
+ */
 function AdjustSlider({
   id,
   label,
-  readout,
+  format,
   value,
   min,
   max,
   step,
   onChange,
+  commit = false,
+  hideLabel = false,
 }: {
   id: string
   label: string
-  readout: string
+  format: (v: number) => string
   value: number
   min: number
   max: number
   step: number
   onChange: (v: number) => void
+  commit?: boolean
+  hideLabel?: boolean
 }) {
+  const [local, setLocal] = useState(value)
+  useEffect(() => setLocal(value), [value])
   return (
-    <div className="grid gap-2.5">
-      <div className="flex items-baseline justify-between text-sm">
+    <div className="grid gap-2">
+      <div className={cn('flex items-baseline justify-between text-sm', hideLabel && 'sr-only')}>
         <span id={`${id}-label`}>{label}</span>
-        <span className="font-mono text-xs tabular-nums text-muted-foreground">{readout}</span>
+        <span className="font-mono text-xs tabular-nums text-muted-foreground">{format(local)}</span>
       </div>
-      <Slider aria-labelledby={`${id}-label`} value={[value]} min={min} max={max} step={step} onValueChange={([v]) => onChange(v ?? value)} />
+      <Slider
+        aria-labelledby={`${id}-label`}
+        aria-valuetext={format(local)}
+        value={[local]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={([v]) => {
+          const next = v ?? local
+          setLocal(next)
+          if (!commit) onChange(next)
+        }}
+        onValueCommit={([v]) => {
+          if (commit) onChange(v ?? local)
+        }}
+      />
     </div>
   )
 }
@@ -122,6 +195,16 @@ function Section({ title, aside, children }: { title: string; aside?: React.Reac
     </section>
   )
 }
+
+type Tool = 'style' | 'adjust' | 'paper' | 'save'
+type AdjustKey = 'detail' | 'brightness' | 'contrast'
+
+const TOOLS: Array<{ id: Tool; label: string; icon: typeof Shapes }> = [
+  { id: 'style', label: 'Style', icon: Shapes },
+  { id: 'adjust', label: 'Adjust', icon: SlidersHorizontal },
+  { id: 'paper', label: 'Paper', icon: Contrast },
+  { id: 'save', label: 'Save', icon: Download },
+]
 
 export function Studio() {
   const mounted = useMounted()
@@ -140,6 +223,9 @@ export function Studio() {
   const [dragging, setDragging] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [font, setFont] = useState(FALLBACK_MONO)
+  const [saving, setSaving] = useState(false)
+  const [tool, setTool] = useState<Tool>('style')
+  const [adjustKey, setAdjustKey] = useState<AdjustKey>('brightness')
 
   // Start on the paper that matches the theme; after that the two are independent.
   const paperSet = useRef(false)
@@ -174,17 +260,17 @@ export function Studio() {
   const field = useMemo(() => {
     if (!source) return null
     const grid = gridFor(mode, cols, source.width, source.height)
-    return analyzeImage(source, grid.cols, grid.rows)
+    return analyzeImage(source.work, grid.cols, grid.rows)
     // Only the grid shape matters, not which square mode is showing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, cols, gridKind])
 
   const thumbs = useMemo(() => {
     if (!source) return { square: null, text: null }
-    const crop = coverCrop(source.width, source.height, 1)
+    const crop = coverCrop(source.work.width, source.work.height, 1)
     return {
-      square: analyzeImage(source, 26, 26, crop),
-      text: analyzeImage(source, 22, 13, crop),
+      square: analyzeImage(source.work, 26, 26, crop),
+      text: analyzeImage(source.work, 22, 13, crop),
     }
   }, [source])
 
@@ -201,6 +287,7 @@ export function Studio() {
           if (prev?.url.startsWith('blob:')) URL.revokeObjectURL(prev.url)
           return next
         })
+        setCompare(false)
         setNotice(null)
       })
       .catch(() => {
@@ -217,6 +304,8 @@ export function Studio() {
       })
       .catch(() => setNotice('The sample image did not load.'))
   }
+
+  const chooseFile = () => fileRef.current?.click()
 
   // Drop anywhere, or paste from the clipboard.
   useEffect(() => {
@@ -281,33 +370,91 @@ export function Studio() {
     return { w: source.width, h: source.height, pad: 0 }
   }, [exportSize, source])
 
-  const download = () => {
-    if (!source || !field || !exportDims) return
-    const { w, h, pad } = exportDims
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.fillStyle = PAPER_COLOR[paper]
-    ctx.fillRect(0, 0, w, h)
-    const inset = Math.min(w, h) * pad
-    const rect = containRect({ x: inset, y: inset, w: w - inset * 2, h: h - inset * 2 }, source.width / source.height)
-    drawPattern(ctx, field, mode, rect, { paper, font, ...look })
-    const base = source.name.replace(/\.[^.]+$/, '') || 'image'
-    canvas.toBlob((blob) => {
-      if (!blob) return
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `${base}-luma-${mode}-${paper === 'dark' ? 'black' : 'white'}.png`
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-    }, 'image/png')
+  const save = async () => {
+    if (!source || !field || !exportDims || saving) return
+    setSaving(true)
+    try {
+      const { w, h, pad } = exportDims
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.fillStyle = PAPER_COLOR[paper]
+      ctx.fillRect(0, 0, w, h)
+      const inset = Math.min(w, h) * pad
+      const rect = containRect({ x: inset, y: inset, w: w - inset * 2, h: h - inset * 2 }, source.width / source.height)
+      drawPattern(ctx, field, mode, rect, { paper, font, ...look })
+      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
+      if (!blob) throw new Error('encode')
+      const base = source.name.replace(/\.[^.]+$/, '') || 'image'
+      await saveBlob(blob, `${base}-luma-${mode}-${paper === 'dark' ? 'black' : 'white'}.png`)
+    } catch {
+      setNotice("The image couldn't be saved. Try a smaller export size.")
+    } finally {
+      setSaving(false)
+    }
   }
 
+  const displayCols = (d: number) => (mode === 'ascii' ? gridFor('ascii', columnsFor(d), 1, 1).cols : columnsFor(d))
+
+  const sliders: Record<AdjustKey, React.ComponentProps<typeof AdjustSlider>> = {
+    detail: {
+      id: 'detail',
+      label: 'Detail',
+      format: (v) => `${displayCols(v)} columns`,
+      value: detail,
+      min: 45,
+      max: 100,
+      step: 5,
+      onChange: setDetail,
+      commit: true,
+    },
+    brightness: {
+      id: 'brightness',
+      label: 'Brightness',
+      format: signed,
+      value: brightness,
+      min: -100,
+      max: 100,
+      step: 5,
+      onChange: setBrightness,
+    },
+    contrast: {
+      id: 'contrast',
+      label: 'Contrast',
+      format: signed,
+      value: contrast,
+      min: -100,
+      max: 100,
+      step: 5,
+      onChange: setContrast,
+    },
+  }
+
+  const paperOptions: Array<{ value: Paper; label: string }> = [
+    { value: 'dark', label: 'Black' },
+    { value: 'light', label: 'White' },
+  ]
+  const exportOptions = EXPORT_SIZES.map((s) => ({ value: s, label: EXPORT_SIZE_LABELS[s] }))
+  const exportReadout = exportDims ? `${exportDims.w} × ${exportDims.h} px` : '—'
+  const onPaperInk = paper === 'dark' ? 'text-white' : 'text-black'
+
   return (
-    <div className="luma studio flex min-h-svh flex-col bg-background text-foreground lg:h-svh lg:overflow-hidden">
-      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-[var(--rule)] px-4">
+    <div className="luma studio flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        tabIndex={-1}
+        onChange={(e) => {
+          takeFile(e.target.files?.[0])
+          e.target.value = ''
+        }}
+      />
+
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[var(--rule)] px-3 lg:h-14 lg:px-4">
         <div className="flex min-w-0 items-center gap-3">
           <Link href="/" aria-label="LUMA home" className="focus-ring -m-2 p-2">
             <Wordmark />
@@ -315,31 +462,34 @@ export function Studio() {
           <span className="text-muted-foreground/60">/</span>
           <span className="text-sm text-muted-foreground">Studio</span>
         </div>
-        <p className="hidden min-w-0 truncate font-mono text-xs text-muted-foreground md:block">
+        <p className="hidden min-w-0 truncate font-mono text-xs text-muted-foreground lg:block">
           {source ? `${source.name} — ${source.width} × ${source.height}` : 'No image yet'}
         </p>
-        <button
-          type="button"
-          onClick={() => setTheme(isDark ? 'light' : 'dark')}
-          className="nav-link focus-ring size-9 justify-center rounded-md p-0"
-          aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-        >
-          {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-        </button>
+        <div className="flex items-center gap-1">
+          {source ? (
+            <button
+              type="button"
+              onClick={chooseFile}
+              className="nav-link focus-ring h-9 gap-1.5 rounded-md px-2.5 text-sm lg:hidden"
+              aria-label="Choose another image"
+            >
+              <ImagePlus className="size-4" />
+              New
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setTheme(isDark ? 'light' : 'dark')}
+            className="nav-link focus-ring size-9 justify-center rounded-md p-0"
+            aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+          >
+            {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+          </button>
+        </div>
       </header>
 
-      <div className="grid flex-1 lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <main
-          className={cn(
-            'relative lg:h-auto lg:min-h-0',
-            // On small screens the stage takes the image's shape and stays pinned
-            // while the controls scroll underneath, so changes stay in view.
-            source
-              ? 'sticky top-0 z-20 aspect-[var(--stage-ar)] max-h-[45svh] min-h-[220px] w-full lg:static lg:aspect-auto lg:max-h-none'
-              : 'h-[62svh] min-h-[360px]',
-          )}
-          style={source ? ({ '--stage-ar': `${source.width} / ${source.height * 1.12}` } as React.CSSProperties) : undefined}
-        >
+      <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_340px]">
+        <main className="relative min-h-0 flex-1">
           <Stage
             field={field}
             mode={mode}
@@ -347,14 +497,14 @@ export function Studio() {
             look={look}
             font={font}
             compare={compare && !!source}
-            source={source}
+            source={source?.work ?? null}
             label={source ? `${source.name} drawn in ${RENDER_MODE_LABELS[mode]} style` : 'Empty canvas'}
           >
             {source ? (
               <>
                 <p
                   className={cn(
-                    'pointer-events-none absolute left-4 top-3 font-mono text-[0.6875rem]',
+                    'pointer-events-none absolute left-4 top-3 hidden font-mono text-[0.6875rem] lg:block',
                     paper === 'dark' ? 'text-white/60' : 'text-black/55',
                   )}
                 >
@@ -365,34 +515,36 @@ export function Studio() {
                   aria-pressed={compare}
                   onClick={() => setCompare((c) => !c)}
                   className={cn(
-                    'focus-ring absolute right-3 top-2.5 rounded-full px-3 py-1 text-xs backdrop-blur transition-colors',
+                    'focus-ring absolute right-3 top-3 z-20 rounded-full px-3.5 py-1.5 text-xs font-medium backdrop-blur transition-colors lg:top-2.5 lg:py-1',
                     paper === 'dark'
                       ? compare
                         ? 'bg-white text-black'
-                        : 'bg-white/10 text-white hover:bg-white/20'
+                        : 'bg-white/15 text-white hover:bg-white/25'
                       : compare
                         ? 'bg-black text-white'
-                        : 'bg-black/5 text-black hover:bg-black/10',
+                        : 'bg-black/[0.07] text-black hover:bg-black/15',
                   )}
                 >
-                  Compare
+                  {compare ? 'Done' : 'Compare'}
                 </button>
               </>
             ) : (
-              <div className={cn('absolute inset-0 grid place-items-center p-6 text-center', paper === 'dark' ? 'text-white' : 'text-black')}>
+              <div className={cn('absolute inset-0 grid place-items-center p-6 text-center', onPaperInk)}>
                 <div className="flex max-w-md flex-col items-center gap-5">
-                  <p className="font-display text-[clamp(2.25rem,5vw,4rem)] font-extralight leading-none tracking-[-0.04em] [font-variation-settings:'wdth'_140]">
-                    Drop an image
+                  <p className="font-display text-[clamp(2.25rem,9vw,4rem)] font-extralight leading-none tracking-[-0.04em] [font-variation-settings:'wdth'_140]">
+                    <span className="lg:hidden">Pick a photo</span>
+                    <span className="hidden lg:inline">Drop an image</span>
                   </p>
                   <p className={cn('text-sm', paper === 'dark' ? 'text-white/60' : 'text-black/60')}>
-                    Or paste one, or choose a file. It stays in this tab — nothing is uploaded.
+                    <span className="lg:hidden">It stays on your phone — nothing is uploaded.</span>
+                    <span className="hidden lg:inline">Or paste one, or choose a file. It stays in this tab — nothing is uploaded.</span>
                   </p>
                   <div className="flex flex-wrap justify-center gap-2">
                     <button
                       type="button"
-                      onClick={() => fileRef.current?.click()}
+                      onClick={chooseFile}
                       className={cn(
-                        'focus-ring inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-medium',
+                        'focus-ring inline-flex h-12 items-center gap-2 rounded-full px-5 text-sm font-medium lg:h-10 lg:px-4',
                         paper === 'dark' ? 'bg-white text-black hover:bg-white/85' : 'bg-black text-white hover:bg-black/85',
                       )}
                     >
@@ -403,7 +555,7 @@ export function Studio() {
                       type="button"
                       onClick={loadSample}
                       className={cn(
-                        'focus-ring inline-flex h-10 items-center rounded-full border px-4 text-sm',
+                        'focus-ring inline-flex h-12 items-center rounded-full border px-5 text-sm lg:h-10 lg:px-4',
                         paper === 'dark' ? 'border-white/25 hover:border-white' : 'border-black/20 hover:border-black',
                       )}
                     >
@@ -421,8 +573,114 @@ export function Studio() {
           </Stage>
         </main>
 
-        <aside aria-label="Settings" className="flex flex-col border-[var(--rule)] lg:min-h-0 lg:border-l">
-          <div className="flex-1 lg:overflow-y-auto">
+        {/* Phones and tablets: one tool at a time in a fixed-height dock, so nothing scrolls. */}
+        {source ? (
+          <div className="shrink-0 border-t border-[var(--rule)] bg-background lg:hidden">
+            <div role="tabpanel" aria-label={TOOLS.find((t) => t.id === tool)?.label} className="flex h-[8.5rem] flex-col justify-center">
+              {tool === 'style' ? (
+                <StylePicker name="style-mobile" value={mode} onChange={setMode} thumbs={thumbs} paper={paper} font={font} layout="strip" />
+              ) : null}
+
+              {tool === 'adjust' ? (
+                <div className="grid gap-4 px-4">
+                  <div className="flex items-center gap-1.5">
+                    {(['detail', 'brightness', 'contrast'] as const).map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        aria-pressed={adjustKey === k}
+                        onClick={() => setAdjustKey(k)}
+                        className={cn(
+                          'focus-ring h-8 rounded-full px-3 text-xs transition-colors',
+                          adjustKey === k ? 'bg-foreground text-background' : 'bg-foreground/[0.07] text-muted-foreground',
+                        )}
+                      >
+                        {sliders[k].label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={resetAdjust}
+                      disabled={!adjusted}
+                      aria-label="Reset adjustments"
+                      className="focus-ring ml-auto grid size-8 place-items-center rounded-full text-muted-foreground disabled:opacity-30"
+                    >
+                      <RotateCcw className="size-4" />
+                    </button>
+                  </div>
+                  <AdjustSlider key={adjustKey} {...sliders[adjustKey]} />
+                </div>
+              ) : null}
+
+              {tool === 'paper' ? (
+                <div role="radiogroup" aria-label="Paper" className="grid grid-cols-2 gap-3 px-4">
+                  {paperOptions.map((o) => (
+                    <label
+                      key={o.value}
+                      className={cn(
+                        'flex h-16 cursor-pointer items-center gap-3 rounded-xl px-4 ring-1 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
+                        paper === o.value ? 'ring-2 ring-foreground' : 'ring-[var(--rule)]',
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="paper-mobile"
+                        value={o.value}
+                        checked={paper === o.value}
+                        onChange={() => setPaper(o.value)}
+                        className="sr-only"
+                      />
+                      <span className="size-7 rounded-full ring-1 ring-foreground/25" style={{ background: PAPER_COLOR[o.value] }} />
+                      <span className="text-sm">{o.label}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+
+              {tool === 'save' ? (
+                <div className="grid gap-3 px-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Size</span>
+                    <span className="font-mono text-xs tabular-nums text-muted-foreground">{exportReadout}</span>
+                  </div>
+                  <Segmented label="Export size" name="export-mobile" value={exportSize} onChange={setExportSize} options={exportOptions} size="lg" />
+                  <button type="button" onClick={save} disabled={saving} className="btn-solid h-11 w-full justify-center disabled:opacity-50">
+                    <Download className="size-4" />
+                    {saving ? 'Preparing…' : 'Save image'}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            {notice ? (
+              <p role="alert" className="px-4 pb-2 text-xs text-destructive">
+                {notice}
+              </p>
+            ) : null}
+
+            <nav aria-label="Tools" className="grid grid-cols-4 border-t border-[var(--rule)] pb-[env(safe-area-inset-bottom)]">
+              {TOOLS.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={tool === id}
+                  onClick={() => setTool(id)}
+                  className={cn(
+                    'focus-ring flex h-14 flex-col items-center justify-center gap-1 text-[0.6875rem] transition-colors',
+                    tool === id ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
+                  <Icon className="size-5" strokeWidth={tool === id ? 2.2 : 1.6} />
+                  {label}
+                </button>
+              ))}
+            </nav>
+          </div>
+        ) : null}
+
+        {/* Desktop: everything in one column beside the stage. */}
+        <aside aria-label="Settings" className="hidden min-h-0 flex-col border-l border-[var(--rule)] lg:flex">
+          <div className="flex-1 overflow-y-auto">
             <Section title="Image">
               <div className="flex items-center gap-3">
                 <div className="size-11 shrink-0 overflow-hidden rounded-[3px] bg-foreground/[0.06]">
@@ -434,7 +692,7 @@ export function Studio() {
                     {source ? `${source.width} × ${source.height}` : 'Drop, paste or choose'}
                   </p>
                 </div>
-                <button type="button" onClick={() => fileRef.current?.click()} className="btn-line h-8 px-3 text-xs">
+                <button type="button" onClick={chooseFile} className="btn-line h-8 px-3 text-xs">
                   {source ? 'Replace' : 'Choose'}
                 </button>
               </div>
@@ -443,21 +701,10 @@ export function Studio() {
                   {notice}
                 </p>
               ) : null}
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                tabIndex={-1}
-                onChange={(e) => {
-                  takeFile(e.target.files?.[0])
-                  e.target.value = ''
-                }}
-              />
             </Section>
 
             <Section title="Style">
-              <StylePicker value={mode} onChange={setMode} thumbs={thumbs} paper={paper} font={font} />
+              <StylePicker name="style-desktop" value={mode} onChange={setMode} thumbs={thumbs} paper={paper} font={font} />
             </Section>
 
             <Section
@@ -472,73 +719,31 @@ export function Studio() {
               }
             >
               <div className="grid gap-5">
-                <AdjustSlider
-                  id="detail"
-                  label="Detail"
-                  readout={`${field?.cols ?? cols} columns`}
-                  value={detail}
-                  min={45}
-                  max={100}
-                  step={5}
-                  onChange={setDetail}
-                />
-                <AdjustSlider
-                  id="brightness"
-                  label="Brightness"
-                  readout={signed(brightness)}
-                  value={brightness}
-                  min={-100}
-                  max={100}
-                  step={5}
-                  onChange={setBrightness}
-                />
-                <AdjustSlider
-                  id="contrast"
-                  label="Contrast"
-                  readout={signed(contrast)}
-                  value={contrast}
-                  min={-100}
-                  max={100}
-                  step={5}
-                  onChange={setContrast}
-                />
+                <AdjustSlider {...sliders.detail} id="detail-desk" />
+                <AdjustSlider {...sliders.brightness} id="brightness-desk" />
+                <AdjustSlider {...sliders.contrast} id="contrast-desk" />
               </div>
             </Section>
 
             <Section title="Paper">
-              <Segmented
-                label="Paper"
-                value={paper}
-                onChange={setPaper}
-                options={[
-                  { value: 'dark', label: 'Black' },
-                  { value: 'light', label: 'White' },
-                ]}
-              />
+              <Segmented label="Paper" value={paper} onChange={setPaper} options={paperOptions} />
             </Section>
           </div>
 
-          <div className="border-t border-[var(--rule)] bg-background px-4 py-4 lg:border-t-0">
+          <div className="bg-background px-4 py-4">
             <div className="mb-3 flex items-baseline justify-between gap-3">
               <h2 className="font-mono text-[0.6875rem] text-muted-foreground">Export</h2>
-              <span className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground">
-                {exportDims ? `${exportDims.w} × ${exportDims.h} px` : '—'}
-              </span>
+              <span className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground">{exportReadout}</span>
             </div>
-            <Segmented
-              label="Export size"
-              value={exportSize}
-              onChange={setExportSize}
-              options={EXPORT_SIZES.map((s) => ({ value: s, label: EXPORT_SIZE_LABELS[s] }))}
-            />
+            <Segmented label="Export size" name="export-desktop" value={exportSize} onChange={setExportSize} options={exportOptions} />
             <button
               type="button"
-              onClick={download}
-              disabled={!source}
+              onClick={save}
+              disabled={!source || saving}
               className="btn-solid mt-3 h-11 w-full justify-center disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Download className="size-4" />
-              Download PNG
+              {saving ? 'Preparing…' : 'Download PNG'}
             </button>
           </div>
         </aside>
