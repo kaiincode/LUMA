@@ -169,3 +169,192 @@
     @apply leading-relaxed text-base;
   }
 }
+
+/* ---------- Landing ---------- */
+
+@layer components {
+  .luma {
+    --plate: #0a0b0d;
+    --rule: color-mix(in oklab, var(--foreground) 14%, transparent);
+  }
+
+  .dark .luma {
+    --plate: #000000;
+  }
+
+  .font-display {
+    font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .landing .shell {
+    margin-inline: auto;
+    max-width: 1680px;
+    padding-inline: 1rem;
+  }
+
+  .landing .section {
+    padding-block: 6rem;
+  }
+
+  @media (min-width: 768px) {
+    .landing .shell {
+      padding-inline: 2rem;
+    }
+    .landing .section {
+      padding-block: 10rem;
+    }
+  }
+
+  .luma .focus-ring:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: 2px;
+  }
+
+  .luma .nav-link {
+    display: inline-flex;
+    align-items: center;
+    height: 2.25rem;
+    padding-inline: 0.75rem;
+    color: var(--muted-foreground);
+    transition: color 0.2s;
+  }
+
+  .luma .nav-link:hover {
+    color: var(--foreground);
+  }
+
+  .luma .btn-solid,
+  .luma .btn-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    border-radius: 999px;
+    transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+  }
+
+  .luma .btn-solid {
+    background: var(--foreground);
+    color: var(--background);
+  }
+
+  .luma .btn-solid:hover {
+    background: color-mix(in oklab, var(--foreground) 82%, transparent);
+  }
+
+  .luma .btn-line {
+    border: 1px solid var(--rule);
+    color: var(--foreground);
+  }
+
+  .luma .btn-line:hover {
+    border-color: var(--foreground);
+  }
+
+  .luma .btn-solid:focus-visible,
+  .luma .btn-line:focus-visible,
+  .luma .nav-link:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: 2px;
+  }
+
+  .luma .plate-readout {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    color: rgb(255 255 255 / 0.62);
+  }
+
+  /* "Image in," condensed and heavy; "pattern out." wide and light. */
+  .landing h1 {
+    font-size: 14.5vw;
+    line-height: 0.9;
+    letter-spacing: -0.035em;
+  }
+
+  @media (min-width: 640px) {
+    .landing h1 {
+      font-size: min(9.2vw, 10rem);
+    }
+  }
+
+  .landing .hero-in {
+    font-weight: 700;
+    letter-spacing: -0.012em;
+    font-variation-settings: 'wdth' 56;
+  }
+
+  .landing .hero-out {
+    font-weight: 200;
+    font-variation-settings: 'wdth' 150;
+    letter-spacing: -0.045em;
+  }
+
+  .landing .section-index {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
+    padding-top: 0.9rem;
+  }
+
+  .landing .section-title {
+    font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+    font-size: clamp(2.25rem, 5vw, 4.75rem);
+    font-weight: 300;
+    line-height: 0.98;
+    letter-spacing: -0.035em;
+    font-variation-settings: 'wdth' 112;
+  }
+
+  .landing .mode-name {
+    font-size: clamp(2.5rem, 5.2vw, 5rem);
+    font-weight: 300;
+    line-height: 0.9;
+    letter-spacing: -0.035em;
+    color: var(--muted-foreground);
+    font-variation-settings: 'wdth' 60;
+    transition:
+      font-variation-settings 0.7s cubic-bezier(0.2, 0.8, 0.2, 1),
+      color 0.3s;
+  }
+
+  .landing .mode-row[data-active='true'] .mode-name {
+    color: var(--foreground);
+    font-variation-settings: 'wdth' 150;
+  }
+
+  .landing .cta-text {
+    font-size: clamp(2.5rem, 11.2vw, 12rem);
+    font-weight: 200;
+    line-height: 0.85;
+    letter-spacing: -0.05em;
+    white-space: nowrap;
+    font-variation-settings: 'wdth' 96;
+    transition: font-variation-settings 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .landing .cta-link:hover .cta-text,
+  .landing .cta-link:focus-visible .cta-text {
+    font-variation-settings: 'wdth' 142;
+  }
+
+  @keyframes luma-progress {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+
+  .landing .mode-progress {
+    animation: luma-progress linear forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .landing .mode-name,
+    .landing .cta-text {
+      transition: none;
+    }
+  }
+}

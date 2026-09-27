@@ -1,37 +1,23 @@
 import type { RenderMode } from '@/lib/render-mode'
 
-export type MotionMode = 'still' | 'subtle' | 'live'
-export type ExportSize = 'frame' | 'square1080' | 'poster2k' | 'source'
+export type ExportSize = 'source' | 'square1080' | 'poster2k'
 
-export type ModeSettings = {
-  strength: number
-}
-
-export const DEFAULT_MODE_SETTINGS: Record<RenderMode, ModeSettings> = {
-  ascii: { strength: 70 },
-  dots: { strength: 70 },
-  hatch: { strength: 68 },
-  mosaic: { strength: 66 },
-  contour: { strength: 72 },
-  stipple: { strength: 70 },
-  halftone: { strength: 70 },
+/**
+ * How heavy each style's marks are by default (0 … 1). Styles differ in how
+ * much of a cell a full mark covers, so each gets its own balance.
+ */
+export const MODE_WEIGHT: Record<RenderMode, number> = {
+  ascii: 0.6,
+  dots: 0.6,
+  hatch: 0.55,
+  mosaic: 0.6,
+  contour: 0.65,
+  stipple: 0.6,
+  halftone: 0.6,
 }
 
 export const EXPORT_SIZE_LABELS: Record<ExportSize, string> = {
-  frame: 'Frame',
+  source: 'Original',
   square1080: '1080',
   poster2k: '2K',
-  source: 'Source',
-}
-
-export function getMotionTiming(mode: MotionMode) {
-  if (mode === 'live') {
-    return { intervalMs: 280, phaseStep: 0.42, scale: 0.55 }
-  }
-
-  if (mode === 'subtle') {
-    return { intervalMs: 680, phaseStep: 0.32, scale: 0.28 }
-  }
-
-  return { intervalMs: 0, phaseStep: 0, scale: 0 }
 }

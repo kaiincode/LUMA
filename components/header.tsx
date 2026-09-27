@@ -1,6 +1,6 @@
 'use client'
 
-import { Moon, Sun } from 'lucide-react'
+import { ArrowUpRight, Moon, Sun } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -26,7 +26,13 @@ export function Header() {
           />
         </Link>
 
-        <div className="flex items-center justify-end">
+        <div className="flex items-center justify-end gap-1.5">
+          <Button asChild variant="ghost" size="sm" className="rounded-none uppercase tracking-[0.18em]">
+            <Link href="/studio">
+              Try
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            </Link>
+          </Button>
           <Button
             variant="ghost"
             size="icon"
