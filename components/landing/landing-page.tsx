@@ -38,8 +38,8 @@ const STEPS = [
 const SPEC: Array<[string, string]> = [
   ['Styles', 'ASCII, Dots, Hatch, Mosaic, Contour, Stipple, Halftone'],
   ['Adjust', 'Detail from 60 to 260 columns, brightness and contrast'],
-  ['Export', 'PNG at the original size, 1080 × 1080 or 2048 × 2048 — drawn sharp at every size'],
-  ['Paper', 'Black or white. Marks grow where the image is lightest on black, darkest on white'],
+  ['Export', 'PNG in the image’s own proportions: original size, or 1080 or 2048 px on the long side'],
+  ['Paper', 'Auto keeps the image’s own background and colours; black and white are also there'],
   ['Processing', 'Canvas 2D in your browser. The image is never uploaded.'],
 ]
 

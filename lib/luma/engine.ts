@@ -9,7 +9,13 @@ import type { RenderMode } from '@/lib/render-mode'
  * resolution instead of being scaled up from a small bitmap.
  */
 
-export type Paper = 'dark' | 'light'
+/**
+ * What the marks sit on. `auto` uses the image's own background colour and
+ * keeps the marks in their original colours.
+ */
+export type Paper = 'dark' | 'light' | 'auto'
+
+export type RGB = [number, number, number]
 
 export type LumaSource = {
   el: CanvasImageSource
@@ -32,15 +38,70 @@ export type LumaField = {
   rgb: Uint8ClampedArray
   /** Opacity per cell; transparent areas get no ink. */
   alpha: Float32Array
-  /** Ink colours per paper, built lazily. */
-  inks: Partial<Record<Paper, string[]>>
+  /** Ink colours per paper (and look), built lazily. */
+  inks: Record<string, string[]>
 }
 
 export type Crop = { sx: number; sy: number; sw: number; sh: number }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 
-export const PAPER_COLOR: Record<Paper, string> = { dark: '#000000', light: '#ffffff' }
+const FIXED_PAPER: Record<'dark' | 'light', RGB> = { dark: [0, 0, 0], light: [255, 255, 255] }
+
+/** The paper's colour. `auto` needs the background measured from the image. */
+export function paperRGB(paper: Paper, background?: RGB | null): RGB {
+  if (paper === 'auto') return background ?? FIXED_PAPER.light
+  return FIXED_PAPER[paper]
+}
+
+export function paperCss(paper: Paper, background?: RGB | null) {
+  const [r, g, b] = paperRGB(paper, background)
+  return `rgb(${r},${g},${b})`
+}
+
+/** Whether text and handles drawn on this paper should be light. */
+export function isDarkPaper(paper: Paper, background?: RGB | null) {
+  const [r, g, b] = paperRGB(paper, background)
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5
+}
+
+/**
+ * The image's background colour: the per-channel median of a thin ring
+ * around the edge, which is where the background usually shows. Returns null
+ * when the edge is mostly transparent.
+ */
+export function estimateBackground(source: LumaSource): RGB | null {
+  const size = 96
+  const k = Math.min(1, size / Math.max(source.width, source.height))
+  const w = Math.max(4, Math.round(source.width * k))
+  const h = Math.max(4, Math.round(source.height * k))
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const ctx = c.getContext('2d', { willReadFrequently: true })!
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(source.el, 0, 0, w, h)
+  const d = ctx.getImageData(0, 0, w, h).data
+  const ring = Math.max(1, Math.round(Math.min(w, h) * 0.04))
+  const rs: number[] = []
+  const gs: number[] = []
+  const bs: number[] = []
+  let seen = 0
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x >= ring && x < w - ring && y >= ring && y < h - ring) continue
+      seen++
+      const i = (y * w + x) * 4
+      if (d[i + 3] < 128) continue
+      rs.push(d[i])
+      gs.push(d[i + 1])
+      bs.push(d[i + 2])
+    }
+  }
+  if (rs.length < seen * 0.5) return null
+  const median = (a: number[]) => a.sort((p, q) => p - q)[a.length >> 1]
+  return [median(rs), median(gs), median(bs)]
+}
 
 /* ------------------------------------------------------------------ */
 /* Analysis                                                            */
@@ -254,17 +315,21 @@ export function analyzeImage(source: LumaSource, cols: number, rows: number, cro
 }
 
 /**
- * Ink colours for a paper. Tone is carried by the size of each mark, so the
- * colour is pulled towards a luminance that reads on that paper and given a
- * little extra saturation. That keeps dark hues visible on black and pale
- * hues visible on white.
+ * Ink colours for a paper. On black or white, tone is carried by the size of
+ * each mark, so the colour is pulled towards a luminance that reads on that
+ * paper and given a little extra saturation — dark hues stay visible on black
+ * and pale hues on white. On `auto` paper the marks keep their own colour,
+ * with brightness applied directly.
  */
-function inksFor(field: LumaField, paper: Paper) {
-  const cached = field.inks[paper]
+function inksFor(field: LumaField, opts: DrawOptions) {
+  const auto = opts.paper === 'auto'
+  const bright = auto ? (opts.brightness ?? 0) * 0.35 : 0
+  const key = auto ? `auto:${bright.toFixed(3)}` : opts.paper
+  const cached = field.inks[key]
   if (cached) return cached
-  const target = paper === 'dark' ? 0.74 : 0.3
-  const pull = 0.55
-  const vib = 1.3
+  const target = opts.paper === 'dark' ? 0.74 : 0.3
+  const pull = auto ? 0 : 0.55
+  const vib = auto ? 1.08 : 1.3
   const n = field.cols * field.rows
   const out = new Array<string>(n)
   for (let i = 0; i < n; i++) {
@@ -275,12 +340,12 @@ function inksFor(field: LumaField, paper: Paper) {
     r = y + (r - y) * vib
     g = y + (g - y) * vib
     b = y + (b - y) * vib
-    const shift = (y + (target - y) * pull) - y
+    const shift = (target - y) * pull + bright
     out[i] = `rgb(${Math.round(clamp01(r + shift) * 255)},${Math.round(clamp01(g + shift) * 255)},${Math.round(
       clamp01(b + shift) * 255,
     )})`
   }
-  field.inks[paper] = out
+  field.inks[key] = out
   return out
 }
 
@@ -369,6 +434,8 @@ export type DrawOptions = {
   brightness?: number
   /** -1 … 1: spreads or flattens the tones before they become marks. */
   contrast?: number
+  /** The image's background colour, used when `paper` is `auto`. */
+  background?: RGB | null
   /** Treat every cell as solid subject (used for type set in patterns). */
   boost?: boolean
   /** Font stack for ASCII. */
@@ -388,7 +455,7 @@ function hash(x: number, y: number, k: number) {
  * light paper, dark areas do — so the output always reads like the source.
  */
 export function coverageMap(field: LumaField, opts: DrawOptions) {
-  const { tone, edge, alpha, cols, rows } = field
+  const { tone, edge, alpha, rgb, cols, rows } = field
   const s = opts.strength ?? 0.55
   const gamma = 1.55 - s * 0.95 // 1.55 (light) … 0.6 (heavy)
   const edgeGain = 0.12 + s * 0.4
@@ -397,6 +464,26 @@ export function coverageMap(field: LumaField, opts: DrawOptions) {
   // Contrast as a slope around mid-grey: 0.35× (flat) … 2.6× (punchy).
   const slope = contrast >= 0 ? 1 + contrast * 1.6 : 1 + contrast * 0.65
   const out = new Float32Array(cols * rows)
+  if (opts.paper === 'auto') {
+    // On the image's own background, ink goes wherever a cell differs from
+    // that background, by colour as much as by lightness. Contrast steepens
+    // the response; brightness is applied to the ink colour instead.
+    const [br, bg, bb] = paperRGB('auto', opts.background)
+    const exp = gamma / slope
+    for (let i = 0; i < cols * rows; i++) {
+      const dr = rgb[i * 3] - br
+      const dg = rgb[i * 3 + 1] - bg
+      const db = rgb[i * 3 + 2] - bb
+      // "Redmean" weighting: a cheap approximation of perceived colour distance.
+      const rm = (rgb[i * 3] + br) / 2
+      const dist = Math.sqrt((2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db) / 765
+      let v = Math.max(0, dist * 2.4 - 0.06) / 0.94
+      v = Math.pow(clamp01(v), exp) + edge[i] * edgeGain * Math.min(1, v * 2)
+      if (opts.boost) v = 0.42 + 0.58 * v
+      out[i] = clamp01(v) * alpha[i]
+    }
+    return out
+  }
   for (let i = 0; i < cols * rows; i++) {
     const t = clamp01((tone[i] - 0.5) * slope + 0.5 + bright)
     let v = opts.paper === 'dark' ? t : 1 - t
@@ -424,7 +511,7 @@ export function drawPattern(
   const ch = rect.h / rows
   const s = Math.min(cw, ch)
   const cov = coverageMap(field, opts)
-  const inks = inksFor(field, opts.paper)
+  const inks = inksFor(field, opts)
 
   ctx.save()
   ctx.beginPath()

@@ -1,6 +1,7 @@
 import type { RenderMode } from '@/lib/render-mode'
 
-export type ExportSize = 'source' | 'square1080' | 'poster2k'
+/** Export sizes all keep the image's proportions: the original size, or a long side of 1080 or 2048 px. */
+export type ExportSize = 'source' | 'long1080' | 'long2048'
 
 /**
  * How heavy each style's marks are by default (0 … 1). Styles differ in how
@@ -18,6 +19,6 @@ export const MODE_WEIGHT: Record<RenderMode, number> = {
 
 export const EXPORT_SIZE_LABELS: Record<ExportSize, string> = {
   source: 'Original',
-  square1080: '1080',
-  poster2k: '2K',
+  long1080: '1080',
+  long2048: '2K',
 }

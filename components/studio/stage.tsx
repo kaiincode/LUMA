@@ -2,7 +2,17 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { RenderMode } from '@/lib/render-mode'
-import { containRect, drawPattern, PAPER_COLOR, type LumaField, type LumaSource, type Paper, type Rect } from '@/lib/luma/engine'
+import {
+  containRect,
+  drawPattern,
+  isDarkPaper,
+  paperCss,
+  type LumaField,
+  type LumaSource,
+  type Paper,
+  type Rect,
+  type RGB,
+} from '@/lib/luma/engine'
 import { cn } from '@/lib/utils'
 
 /** Space left around the artwork inside the stage, as a share of the short side. */
@@ -12,6 +22,8 @@ type StageProps = {
   field: LumaField | null
   mode: RenderMode
   paper: Paper
+  /** The image's background colour, for `auto` paper. */
+  background: RGB | null
   /** Mark weight and tone adjustments, passed straight to the engine. */
   look: { strength: number; brightness: number; contrast: number }
   font: string
@@ -22,7 +34,7 @@ type StageProps = {
   children?: React.ReactNode
 }
 
-export function Stage({ field, mode, paper, look, font, compare, source, label, onSize, children }: StageProps) {
+export function Stage({ field, mode, paper, background, look, font, compare, source, label, onSize, children }: StageProps) {
   const boxRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
@@ -78,16 +90,21 @@ export function Stage({ field, mode, paper, look, font, compare, source, label, 
     }
     const lctx = layer.getContext('2d')!
 
+    // Only the image's own rectangle is paper; the rest of the stage stays the
+    // neutral surface behind it, so the artwork always shows its true shape.
     const render = () => {
-      lctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      lctx.fillStyle = PAPER_COLOR[paper]
-      lctx.fillRect(0, 0, size.w, size.h)
+      lctx.setTransform(1, 0, 0, 1, 0, 0)
+      lctx.clearRect(0, 0, pw, ph)
       if (!field || !art) return
-      drawPattern(lctx, field, mode, art, { paper, font, ...look })
+      lctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      lctx.fillStyle = paperCss(paper, background)
+      lctx.fillRect(art.x, art.y, art.w, art.h)
+      drawPattern(lctx, field, mode, art, { paper, background, font, ...look })
     }
 
     const composite = () => {
       ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, pw, ph)
       ctx.drawImage(layer, 0, 0)
       if (compare && art && source) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -109,18 +126,27 @@ export function Stage({ field, mode, paper, look, font, compare, source, label, 
     return () => cancelAnimationFrame(raf)
     // `art` is derived from size and source, both listed; `look` is compared by value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [field, mode, paper, look.strength, look.brightness, look.contrast, font, compare, source, size])
+  }, [field, mode, paper, background, look.strength, look.brightness, look.contrast, font, compare, source, size])
 
   useEffect(() => {
     compositeRef.current()
   }, [split])
 
-  // Readouts and the divider sit on the paper, so they flip with it.
-  const ink = paper === 'dark' ? 'text-white/70' : 'text-black/65'
+  // The divider sits on the paper, so it flips with it; the labels sit on the stage.
+  const dark = isDarkPaper(paper, background)
+  const ink = 'text-muted-foreground'
 
   return (
-    <div ref={boxRef} className="relative h-full w-full overflow-hidden" style={{ background: PAPER_COLOR[paper] }}>
+    <div ref={boxRef} className="relative h-full w-full overflow-hidden bg-foreground/[0.05]">
       <canvas ref={canvasRef} role="img" aria-label={label} className="absolute inset-0 h-full w-full" />
+      {art ? (
+        // A hairline round the artwork so white paper still reads on a light stage.
+        <div
+          aria-hidden
+          className="pointer-events-none absolute ring-1 ring-foreground/10"
+          style={{ left: art.x, top: art.y, width: art.w, height: art.h }}
+        />
+      ) : null}
 
       {compare && art ? (
         <>
@@ -139,14 +165,14 @@ export function Stage({ field, mode, paper, look, font, compare, source, label, 
             aria-hidden
             className={cn(
               'pointer-events-none absolute w-px peer-focus-visible:[&>span]:outline-2 peer-focus-visible:[&>span]:outline-offset-2',
-              paper === 'dark' ? 'bg-white [&>span]:outline-white' : 'bg-black [&>span]:outline-black',
+              dark ? 'bg-white [&>span]:outline-white' : 'bg-black [&>span]:outline-black',
             )}
             style={{ left: art.x + (art.w * split) / 100, top: art.y, height: art.h }}
           >
             <span
               className={cn(
                 'absolute left-1/2 top-1/2 grid size-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full font-mono text-[0.625rem]',
-                paper === 'dark' ? 'bg-white text-black' : 'bg-black text-white',
+                dark ? 'bg-white text-black' : 'bg-black text-white',
               )}
             >
               ⇆

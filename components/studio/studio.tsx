@@ -10,13 +10,14 @@ import { RENDER_MODE_LABELS, RENDER_MODES, type RenderMode } from '@/lib/render-
 import { EXPORT_SIZE_LABELS, MODE_WEIGHT, type ExportSize } from '@/lib/render-settings'
 import {
   analyzeImage,
-  containRect,
   coverCrop,
   drawPattern,
+  estimateBackground,
   gridFor,
-  PAPER_COLOR,
+  paperCss,
   type LumaSource,
   type Paper,
+  type RGB,
 } from '@/lib/luma/engine'
 import { cn } from '@/lib/utils'
 import { Wordmark } from '@/components/wordmark'
@@ -39,7 +40,9 @@ type Source = {
   work: LumaSource
 }
 
-const EXPORT_SIZES: ExportSize[] = ['source', 'square1080', 'poster2k']
+const EXPORT_SIZES: ExportSize[] = ['source', 'long1080', 'long2048']
+const PAPERS: Paper[] = ['auto', 'dark', 'light']
+const PAPER_LABELS: Record<Paper, string> = { auto: 'Auto', dark: 'Black', light: 'White' }
 const DEFAULT_DETAIL = 70
 
 /** Detail 45–100 maps to 60–260 columns. */
@@ -217,8 +220,8 @@ export function Studio() {
   const [detail, setDetail] = useState(DEFAULT_DETAIL)
   const [brightness, setBrightness] = useState(0)
   const [contrast, setContrast] = useState(0)
-  const [paper, setPaper] = useState<Paper>('dark')
-  const [exportSize, setExportSize] = useState<ExportSize>('poster2k')
+  const [paper, setPaper] = useState<Paper>('auto')
+  const [exportSize, setExportSize] = useState<ExportSize>('long2048')
   const [compare, setCompare] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -227,14 +230,6 @@ export function Studio() {
   const [tool, setTool] = useState<Tool>('style')
   const [adjustKey, setAdjustKey] = useState<AdjustKey>('brightness')
 
-  // Start on the paper that matches the theme; after that the two are independent.
-  const paperSet = useRef(false)
-  useEffect(() => {
-    if (!mounted || paperSet.current || !resolvedTheme) return
-    paperSet.current = true
-    setPaper(resolvedTheme === 'light' ? 'light' : 'dark')
-  }, [mounted, resolvedTheme])
-
   // Glyph coverage is measured in the real font, so wait until it has loaded.
   useEffect(() => {
     document.fonts
@@ -242,6 +237,14 @@ export function Studio() {
       .then(() => setFont(MONO))
       .catch(() => {})
   }, [])
+
+  // `auto` paper uses the colour around the image's edge. Before an image is
+  // loaded, or when its edge is transparent, it follows the theme instead.
+  const measuredBackground = useMemo(() => (source ? estimateBackground(source.work) : null), [source])
+  const background = useMemo<RGB>(
+    () => measuredBackground ?? (isDark ? [0, 0, 0] : [255, 255, 255]),
+    [measuredBackground, isDark],
+  )
 
   const cols = columnsFor(detail)
   // Brightness and contrast run -100 … 100 in the UI and -1 … 1 in the engine.
@@ -365,30 +368,31 @@ export function Studio() {
 
   const exportDims = useMemo(() => {
     if (!source) return null
-    if (exportSize === 'square1080') return { w: 1080, h: 1080, pad: 0.06 }
-    if (exportSize === 'poster2k') return { w: 2048, h: 2048, pad: 0.06 }
-    return { w: source.width, h: source.height, pad: 0 }
+    // Every size keeps the image's proportions; 1080 and 2K set the long side.
+    const long = exportSize === 'long1080' ? 1080 : exportSize === 'long2048' ? 2048 : 0
+    if (!long) return { w: source.width, h: source.height }
+    const k = long / Math.max(source.width, source.height)
+    return { w: Math.round(source.width * k), h: Math.round(source.height * k) }
   }, [exportSize, source])
 
   const save = async () => {
     if (!source || !field || !exportDims || saving) return
     setSaving(true)
     try {
-      const { w, h, pad } = exportDims
+      const { w, h } = exportDims
       const canvas = document.createElement('canvas')
       canvas.width = w
       canvas.height = h
       const ctx = canvas.getContext('2d')
       if (!ctx) return
-      ctx.fillStyle = PAPER_COLOR[paper]
+      ctx.fillStyle = paperCss(paper, background)
       ctx.fillRect(0, 0, w, h)
-      const inset = Math.min(w, h) * pad
-      const rect = containRect({ x: inset, y: inset, w: w - inset * 2, h: h - inset * 2 }, source.width / source.height)
-      drawPattern(ctx, field, mode, rect, { paper, font, ...look })
+      const rect = { x: 0, y: 0, w, h }
+      drawPattern(ctx, field, mode, rect, { paper, background, font, ...look })
       const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
       if (!blob) throw new Error('encode')
       const base = source.name.replace(/\.[^.]+$/, '') || 'image'
-      await saveBlob(blob, `${base}-luma-${mode}-${paper === 'dark' ? 'black' : 'white'}.png`)
+      await saveBlob(blob, `${base}-luma-${mode}-${PAPER_LABELS[paper].toLowerCase()}.png`)
     } catch {
       setNotice("The image couldn't be saved. Try a smaller export size.")
     } finally {
@@ -432,13 +436,9 @@ export function Studio() {
     },
   }
 
-  const paperOptions: Array<{ value: Paper; label: string }> = [
-    { value: 'dark', label: 'Black' },
-    { value: 'light', label: 'White' },
-  ]
+  const paperOptions = PAPERS.map((p) => ({ value: p, label: PAPER_LABELS[p] }))
   const exportOptions = EXPORT_SIZES.map((s) => ({ value: s, label: EXPORT_SIZE_LABELS[s] }))
   const exportReadout = exportDims ? `${exportDims.w} × ${exportDims.h} px` : '—'
-  const onPaperInk = paper === 'dark' ? 'text-white' : 'text-black'
 
   return (
     <div className="luma studio relative flex h-dvh flex-col overflow-clip bg-background text-foreground">
@@ -494,6 +494,7 @@ export function Studio() {
             field={field}
             mode={mode}
             paper={paper}
+            background={background}
             look={look}
             font={font}
             compare={compare && !!source}
@@ -503,10 +504,7 @@ export function Studio() {
             {source ? (
               <>
                 <p
-                  className={cn(
-                    'pointer-events-none absolute left-4 top-3 hidden font-mono text-[0.6875rem] lg:block',
-                    paper === 'dark' ? 'text-white/60' : 'text-black/55',
-                  )}
+                  className="pointer-events-none absolute left-4 top-3 hidden font-mono text-[0.6875rem] text-muted-foreground lg:block"
                 >
                   {RENDER_MODE_LABELS[mode]} · {field?.cols} × {field?.rows} cells
                 </p>
@@ -516,26 +514,22 @@ export function Studio() {
                   onClick={() => setCompare((c) => !c)}
                   className={cn(
                     'focus-ring absolute right-3 top-3 z-20 rounded-full px-3.5 py-1.5 text-xs font-medium backdrop-blur transition-colors lg:top-2.5 lg:py-1',
-                    paper === 'dark'
-                      ? compare
-                        ? 'bg-white text-black'
-                        : 'bg-white/15 text-white hover:bg-white/25'
-                      : compare
-                        ? 'bg-black text-white'
-                        : 'bg-black/[0.07] text-black hover:bg-black/15',
+                    compare
+                      ? 'bg-foreground text-background'
+                      : 'bg-background/80 text-foreground ring-1 ring-[var(--rule)] hover:bg-background',
                   )}
                 >
                   {compare ? 'Done' : 'Compare'}
                 </button>
               </>
             ) : (
-              <div className={cn('absolute inset-0 grid place-items-center p-6 text-center', onPaperInk)}>
+              <div className="absolute inset-0 grid place-items-center p-6 text-center text-foreground">
                 <div className="flex max-w-md flex-col items-center gap-5">
                   <p className="font-display text-[clamp(2.25rem,9vw,4rem)] font-extralight leading-none tracking-[-0.04em] [font-variation-settings:'wdth'_140]">
                     <span className="lg:hidden">Pick a photo</span>
                     <span className="hidden lg:inline">Drop an image</span>
                   </p>
-                  <p className={cn('text-sm', paper === 'dark' ? 'text-white/60' : 'text-black/60')}>
+                  <p className="text-sm text-muted-foreground">
                     <span className="lg:hidden">It stays on your phone — nothing is uploaded.</span>
                     <span className="hidden lg:inline">Or paste one, or choose a file. It stays in this tab — nothing is uploaded.</span>
                   </p>
@@ -544,8 +538,7 @@ export function Studio() {
                       type="button"
                       onClick={chooseFile}
                       className={cn(
-                        'focus-ring inline-flex h-12 items-center gap-2 rounded-full px-5 text-sm font-medium lg:h-10 lg:px-4',
-                        paper === 'dark' ? 'bg-white text-black hover:bg-white/85' : 'bg-black text-white hover:bg-black/85',
+                        'btn-solid focus-ring h-12 px-5 lg:h-10 lg:px-4',
                       )}
                     >
                       <ImagePlus className="size-4" />
@@ -555,8 +548,7 @@ export function Studio() {
                       type="button"
                       onClick={loadSample}
                       className={cn(
-                        'focus-ring inline-flex h-12 items-center rounded-full border px-5 text-sm lg:h-10 lg:px-4',
-                        paper === 'dark' ? 'border-white/25 hover:border-white' : 'border-black/20 hover:border-black',
+                        'btn-line focus-ring h-12 px-5 lg:h-10 lg:px-4',
                       )}
                     >
                       Use sample
@@ -582,7 +574,7 @@ export function Studio() {
               className="flex h-[8.5rem] min-w-0 flex-col justify-center short:h-auto short:flex-1"
             >
               {tool === 'style' ? (
-                <StylePicker name="style-mobile" value={mode} onChange={setMode} thumbs={thumbs} paper={paper} font={font} layout="strip" />
+                <StylePicker name="style-mobile" value={mode} onChange={setMode} thumbs={thumbs} paper={paper} background={background} font={font} layout="strip" />
               ) : null}
 
               {tool === 'adjust' ? (
@@ -617,12 +609,12 @@ export function Studio() {
               ) : null}
 
               {tool === 'paper' ? (
-                <div role="radiogroup" aria-label="Paper" className="grid grid-cols-2 gap-3 px-4">
+                <div role="radiogroup" aria-label="Paper" className="grid grid-cols-3 gap-2.5 px-4">
                   {paperOptions.map((o) => (
                     <label
                       key={o.value}
                       className={cn(
-                        'relative flex h-16 cursor-pointer items-center gap-3 rounded-xl px-4 ring-1 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
+                        'relative flex h-20 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl ring-1 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
                         paper === o.value ? 'ring-2 ring-foreground' : 'ring-[var(--rule)]',
                       )}
                     >
@@ -634,7 +626,7 @@ export function Studio() {
                         onChange={() => setPaper(o.value)}
                         className="sr-only"
                       />
-                      <span className="size-7 rounded-full ring-1 ring-foreground/25" style={{ background: PAPER_COLOR[o.value] }} />
+                      <span className="size-7 rounded-full ring-1 ring-foreground/25" style={{ background: paperCss(o.value, background) }} />
                       <span className="text-sm">{o.label}</span>
                     </label>
                   ))}
@@ -711,7 +703,7 @@ export function Studio() {
             </Section>
 
             <Section title="Style">
-              <StylePicker name="style-desktop" value={mode} onChange={setMode} thumbs={thumbs} paper={paper} font={font} />
+              <StylePicker name="style-desktop" value={mode} onChange={setMode} thumbs={thumbs} paper={paper} background={background} font={font} />
             </Section>
 
             <Section

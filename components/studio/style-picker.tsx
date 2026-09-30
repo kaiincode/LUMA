@@ -3,10 +3,22 @@
 import { useEffect, useRef } from 'react'
 import { RENDER_MODE_LABELS, RENDER_MODES, type RenderMode } from '@/lib/render-mode'
 import { MODE_WEIGHT } from '@/lib/render-settings'
-import { drawPattern, PAPER_COLOR, type LumaField, type Paper } from '@/lib/luma/engine'
+import { drawPattern, paperCss, type LumaField, type Paper, type RGB } from '@/lib/luma/engine'
 import { cn } from '@/lib/utils'
 
-function Thumb({ field, mode, paper, font }: { field: LumaField | null; mode: RenderMode; paper: Paper; font: string }) {
+function Thumb({
+  field,
+  mode,
+  paper,
+  background,
+  font,
+}: {
+  field: LumaField | null
+  mode: RenderMode
+  paper: Paper
+  background: RGB | null
+  font: string
+}) {
   const ref = useRef<HTMLCanvasElement | null>(null)
   useEffect(() => {
     const canvas = ref.current
@@ -17,16 +29,16 @@ function Thumb({ field, mode, paper, font }: { field: LumaField | null; mode: Re
     canvas.height = Math.round(size * dpr)
     const ctx = canvas.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.fillStyle = PAPER_COLOR[paper]
+    ctx.fillStyle = paperCss(paper, background)
     ctx.fillRect(0, 0, size, size)
-    if (field) drawPattern(ctx, field, mode, { x: 0, y: 0, w: size, h: size }, { paper, strength: MODE_WEIGHT[mode], font })
-  }, [field, mode, paper, font])
+    if (field) drawPattern(ctx, field, mode, { x: 0, y: 0, w: size, h: size }, { paper, background, strength: MODE_WEIGHT[mode], font })
+  }, [field, mode, paper, background, font])
   return (
     <canvas
       ref={ref}
       aria-hidden
       className="aspect-square w-full rounded-md"
-      style={{ background: PAPER_COLOR[paper] }}
+      style={{ background: paperCss(paper, background) }}
     />
   )
 }
@@ -39,12 +51,13 @@ type StylePickerProps = {
   /** Small square fields for the thumbnails: text-shaped cells for ASCII, square for the rest. */
   thumbs: { square: LumaField | null; text: LumaField | null }
   paper: Paper
+  background: RGB | null
   font: string
   /** `grid` for the desktop panel, `strip` for a one-row scroller on phones. */
   layout?: 'grid' | 'strip'
 }
 
-export function StylePicker({ name, value, onChange, thumbs, paper, font, layout = 'grid' }: StylePickerProps) {
+export function StylePicker({ name, value, onChange, thumbs, paper, background, font, layout = 'grid' }: StylePickerProps) {
   const stripRef = useRef<HTMLDivElement | null>(null)
 
   // Keep the chosen style in view by scrolling the strip itself. scrollIntoView
@@ -88,7 +101,7 @@ export function StylePicker({ name, value, onChange, thumbs, paper, font, layout
                 active ? 'ring-2 ring-foreground' : 'ring-[var(--rule)] group-hover:ring-foreground/40',
               )}
             >
-              <Thumb field={mode === 'ascii' ? thumbs.text : thumbs.square} mode={mode} paper={paper} font={font} />
+              <Thumb field={mode === 'ascii' ? thumbs.text : thumbs.square} mode={mode} paper={paper} background={background} font={font} />
             </span>
             <span
               className={cn(
