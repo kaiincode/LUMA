@@ -108,7 +108,7 @@ function Segmented<T extends string>({
         <label
           key={o.value}
           className={cn(
-            'cursor-pointer rounded-md text-center transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
+            'relative cursor-pointer rounded-md text-center transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
             size === 'lg' ? 'py-2.5 text-sm' : 'py-1.5 text-xs',
             o.value === value ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
           )}
@@ -441,7 +441,7 @@ export function Studio() {
   const onPaperInk = paper === 'dark' ? 'text-white' : 'text-black'
 
   return (
-    <div className="luma studio flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+    <div className="luma studio relative flex h-dvh flex-col overflow-clip bg-background text-foreground">
       <input
         ref={fileRef}
         type="file"
@@ -454,7 +454,7 @@ export function Studio() {
         }}
       />
 
-      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[var(--rule)] px-3 lg:h-14 lg:px-4">
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[var(--rule)] px-3 short:h-10 lg:h-14 lg:px-4">
         <div className="flex min-w-0 items-center gap-3">
           <Link href="/" aria-label="LUMA home" className="focus-ring -m-2 p-2">
             <Wordmark />
@@ -488,8 +488,8 @@ export function Studio() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_340px]">
-        <main className="relative min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col short:flex-row lg:grid lg:grid-cols-[minmax(0,1fr)_340px]">
+        <main className="relative min-h-0 min-w-0 flex-1">
           <Stage
             field={field}
             mode={mode}
@@ -575,8 +575,12 @@ export function Studio() {
 
         {/* Phones and tablets: one tool at a time in a fixed-height dock, so nothing scrolls. */}
         {source ? (
-          <div className="shrink-0 border-t border-[var(--rule)] bg-background lg:hidden">
-            <div role="tabpanel" aria-label={TOOLS.find((t) => t.id === tool)?.label} className="flex h-[8.5rem] flex-col justify-center">
+          <div className="flex shrink-0 flex-col border-t border-[var(--rule)] bg-background short:w-[19rem] short:border-l short:border-t-0 lg:hidden">
+            <div
+              role="tabpanel"
+              aria-label={TOOLS.find((t) => t.id === tool)?.label}
+              className="flex h-[8.5rem] min-w-0 flex-col justify-center short:h-auto short:flex-1"
+            >
               {tool === 'style' ? (
                 <StylePicker name="style-mobile" value={mode} onChange={setMode} thumbs={thumbs} paper={paper} font={font} layout="strip" />
               ) : null}
@@ -618,7 +622,7 @@ export function Studio() {
                     <label
                       key={o.value}
                       className={cn(
-                        'flex h-16 cursor-pointer items-center gap-3 rounded-xl px-4 ring-1 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
+                        'relative flex h-16 cursor-pointer items-center gap-3 rounded-xl px-4 ring-1 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-foreground',
                         paper === o.value ? 'ring-2 ring-foreground' : 'ring-[var(--rule)]',
                       )}
                     >
@@ -658,7 +662,10 @@ export function Studio() {
               </p>
             ) : null}
 
-            <nav aria-label="Tools" className="grid grid-cols-4 border-t border-[var(--rule)] pb-[env(safe-area-inset-bottom)]">
+            <nav
+              aria-label="Tools"
+              className="grid grid-cols-4 border-t border-[var(--rule)] pb-[env(safe-area-inset-bottom)] short:pr-[env(safe-area-inset-right)]"
+            >
               {TOOLS.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
@@ -666,7 +673,7 @@ export function Studio() {
                   aria-pressed={tool === id}
                   onClick={() => setTool(id)}
                   className={cn(
-                    'focus-ring flex h-14 flex-col items-center justify-center gap-1 text-[0.6875rem] transition-colors',
+                    'focus-ring flex h-14 flex-col items-center justify-center gap-1 text-[0.6875rem] transition-colors short:h-12',
                     tool === id ? 'text-foreground' : 'text-muted-foreground',
                   )}
                 >

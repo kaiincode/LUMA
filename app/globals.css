@@ -3,6 +3,8 @@
 @import '../styles/custom.css';
 
 @custom-variant dark (&:is(.dark *));
+/* Phones turned sideways: wide but very short. */
+@custom-variant short (@media (orientation: landscape) and (max-height: 540px));
 
 :root {
   --background: oklch(1 0 0);
@@ -376,4 +378,13 @@
     width: 1.625rem;
     height: 1.625rem;
   }
+}
+
+/* The studio is a fixed, app-like screen: the document itself never scrolls
+   or pans, so a focused control can't slide the layout sideways. */
+html:has(.studio),
+html:has(.studio) body {
+  overflow: hidden;
+  overscroll-behavior: none;
+  height: 100%;
 }

@@ -47,11 +47,15 @@ type StylePickerProps = {
 export function StylePicker({ name, value, onChange, thumbs, paper, font, layout = 'grid' }: StylePickerProps) {
   const stripRef = useRef<HTMLDivElement | null>(null)
 
-  // Keep the chosen style in view in the scroller.
+  // Keep the chosen style in view by scrolling the strip itself. scrollIntoView
+  // would also scroll every ancestor, which on phones slides the whole page.
   useEffect(() => {
-    if (layout !== 'strip') return
-    const el = stripRef.current?.querySelector<HTMLElement>(`[data-mode="${value}"]`)
-    el?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' })
+    const strip = stripRef.current
+    if (layout !== 'strip' || !strip) return
+    const el = strip.querySelector<HTMLElement>(`[data-mode="${value}"]`)
+    if (!el) return
+    const left = el.offsetLeft - (strip.clientWidth - el.offsetWidth) / 2
+    strip.scrollTo({ left: Math.max(0, left), behavior: 'smooth' })
   }, [layout, value])
 
   return (
@@ -61,14 +65,15 @@ export function StylePicker({ name, value, onChange, thumbs, paper, font, layout
       aria-label="Style"
       className={cn(
         layout === 'strip'
-          ? 'flex snap-x gap-2.5 overflow-x-auto px-4 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+          ? // A single swipeable row; phones turned sideways have the height for a 4-column grid instead.
+            'relative flex snap-x justify-center-safe gap-2.5 overflow-x-auto overscroll-x-contain px-4 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden short:grid short:grid-cols-4 short:gap-y-2 short:overflow-x-visible'
           : 'grid grid-cols-4 gap-x-2 gap-y-3',
       )}
     >
       {RENDER_MODES.map((mode) => {
         const active = mode === value
         return (
-          <label key={mode} data-mode={mode} className={cn('group cursor-pointer', layout === 'strip' && 'w-[4.25rem] shrink-0 snap-center')}>
+          <label key={mode} data-mode={mode} className={cn('group relative cursor-pointer', layout === 'strip' && 'w-[4.25rem] shrink-0 snap-center short:w-auto')}>
             <input
               type="radio"
               name={name}
